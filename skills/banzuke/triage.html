@@ -1,0 +1,959 @@
+<!--
+  Banzuke triage UI (single file, no dependencies).
+  How to use it: inject a JSON array of the titles to sort into the
+  const TITLES = /*__DATA__*/[] array further down (e.g. ["Title A","Title B",...]) and
+  hand the result to the user in a form they can open in their browser (publish it as an
+  Artifact, write it to a file, ...).
+  The result is exported as data.mjs from the UI's "Export" button.
+  Feel free to edit this HTML directly if it needs a change.
+-->
+<title>banzuke triage</title>
+<style>
+  :root {
+    --paper: #f4efe3;
+    --paper-raised: #faf7ef;
+    --ink: #14110d;
+    --muted: #6b655a;
+    --ground: #9c9384;
+    --line: rgba(20, 17, 13, 0.25);
+    --accent: #d62828;
+    --shadow: rgba(20, 17, 13, 0.18);
+    color-scheme: light dark;
+  }
+  /* The :root above is the light baseline as-is. Dark gets the same values through two
+     routes: the OS setting (no explicit theme) and data-theme="dark" */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #1d1a15;
+      --paper-raised: #26221c;
+      --ink: #ece5d4;
+      --muted: #a19887;
+      --ground: #0e0c09;
+      --line: rgba(236, 229, 212, 0.22);
+      --shadow: rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1d1a15;
+    --paper-raised: #26221c;
+    --ink: #ece5d4;
+    --muted: #a19887;
+    --ground: #0e0c09;
+    --line: rgba(236, 229, 212, 0.22);
+    --shadow: rgba(0, 0, 0, 0.5);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", "Yu Gothic", "Meiryo", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible, input:focus-visible, [contenteditable]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* ── Header ── */
+  header {
+    flex: none;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    background: var(--paper);
+    border-bottom: 4px solid var(--ink);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 18px;
+    border-right: 4px solid var(--ink);
+  }
+  .brand b { font-size: 17px; font-weight: 900; letter-spacing: 0.08em; }
+  .brand .sub { font-size: 11px; color: var(--muted); letter-spacing: 0.15em; }
+  .tabs { display: flex; align-items: stretch; }
+  .tab {
+    border: none;
+    background: none;
+    padding: 0 22px;
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    font-size: 13px;
+    color: var(--muted);
+    border-right: 1px solid var(--line);
+  }
+  .tab[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+  .head-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px;
+  }
+  .progress-note { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .btn {
+    background: var(--paper-raised);
+    border: 2px solid var(--ink);
+    padding: 7px 14px;
+    font-weight: 800;
+    font-size: 13px;
+    border-radius: 0;
+    box-shadow: 2px 2px 0 var(--shadow);
+  }
+  .btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--shadow); }
+  .btn.primary { background: var(--ink); color: var(--paper); }
+  .btn.ghost { border-color: var(--line); box-shadow: none; font-weight: 700; color: var(--muted); }
+
+  .bar { flex: none; height: 6px; background: var(--paper); border-bottom: 1px solid var(--line); }
+  .bar i { display: block; height: 100%; background: var(--accent); width: 0%; transition: width 0.15s; }
+  @media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+
+  main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* ── Triage view ── */
+  #triage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+    padding: 28px 20px 40px;
+  }
+  .queue-note { font-size: 13px; color: var(--muted); letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
+  .big-card {
+    background: var(--paper);
+    border: 4px solid var(--ink);
+    box-shadow: 6px 6px 0 var(--shadow);
+    min-height: 170px;
+    width: min(760px, 94vw);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 26px 30px;
+  }
+  .big-card .title {
+    font-weight: 900;
+    line-height: 1.25;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  .done-note { color: var(--muted); }
+  .pads {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    width: min(860px, 94vw);
+  }
+  .pad {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--paper-raised);
+    border: 2px solid var(--ink);
+    border-left-width: 10px;
+    padding: 13px 12px;
+    font-weight: 800;
+    font-size: 15px;
+    text-align: left;
+    box-shadow: 3px 3px 0 var(--shadow);
+  }
+  .pad:active { transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--shadow); }
+  .pad .cnt { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pad.selected { background: var(--ink); color: var(--paper); }
+  .pad.selected .cnt { color: var(--paper); opacity: 0.7; }
+  .key-hint { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.7; }
+  .pad.neutral { border-left-color: var(--muted); }
+  .pad.drop { border-left-color: transparent; border-style: dashed; box-shadow: none; font-weight: 700; color: var(--muted); }
+  .aux { display: flex; gap: 10px; }
+
+  /* ── Board view ── */
+  #board { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .board-tools {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+  }
+  .board-tools input {
+    background: var(--paper-raised);
+    border: 2px solid var(--ink);
+    padding: 6px 10px;
+    font: inherit;
+    width: 240px;
+  }
+  .board-tools .hint { font-size: 12px; color: var(--muted); }
+  .cols {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 0 16px 18px;
+    align-items: stretch;
+  }
+  .col {
+    flex: none;
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    max-height: 100%;
+  }
+  .col-head {
+    flex: none;
+    background: var(--ink);
+    color: var(--paper);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+  .col-head .name {
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    font-size: 13px;
+    padding: 1px 4px;
+    min-width: 40px;
+  }
+  .col-head .name:focus { outline: 2px solid var(--accent); background: rgba(255, 255, 255, 0.1); }
+  .col-head .n { font-size: 12px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+  .chip {
+    margin-left: auto;
+    border: 1px solid currentColor;
+    background: none;
+    color: inherit;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+  }
+  .col-head .del { border: none; background: none; color: inherit; opacity: 0.6; font-size: 13px; padding: 2px 4px; }
+  .col-head .del:hover { opacity: 1; color: #ff8a80; }
+  .col-body { flex: 1; min-height: 60px; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+  .col.lane-seen .col-head, .col.lane-drop .col-head { background: var(--muted); }
+  .col.lane-drop { border-style: dashed; opacity: 0.9; }
+  .col.lane-queue .col-head { background: var(--accent); }
+
+  .card {
+    position: relative;
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-left: 6px solid var(--tier-color, var(--muted));
+    padding: 5px 8px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    cursor: grab;
+    overflow-wrap: anywhere;
+  }
+  .card .rank { color: var(--muted); font-weight: 800; font-size: 11px; margin-right: 5px; font-variant-numeric: tabular-nums; }
+  .card .acts {
+    position: absolute;
+    right: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: none;
+    gap: 3px;
+  }
+  .card:hover .acts { display: flex; }
+  .card .acts button {
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 0 5px;
+  }
+  .card .acts button:hover { color: var(--ink); border-color: var(--ink); }
+  .card.drag-hidden { display: none; }
+  .card.ghost {
+    opacity: 0.45;
+    border-style: dashed;
+    border-left-style: solid;
+    pointer-events: none;
+  }
+  .card.hidden { display: none; }
+  .card-edit {
+    width: 100%;
+    font: inherit;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--accent);
+    padding: 1px 4px;
+  }
+  .add-col {
+    flex: none;
+    width: 44px;
+    border: 2px dashed var(--line);
+    background: none;
+    color: var(--muted);
+    font-size: 22px;
+    font-weight: 800;
+  }
+
+  /* ── Export ── */
+  #export-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .export-box {
+    background: var(--paper);
+    border: 4px solid var(--ink);
+    box-shadow: 8px 8px 0 var(--shadow);
+    width: min(720px, 96vw);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .export-box h2 { margin: 0; padding: 12px 16px; font-size: 15px; letter-spacing: 0.15em; border-bottom: 2px solid var(--ink); }
+  .export-box p { margin: 0; padding: 10px 16px 0; font-size: 13px; color: var(--muted); }
+  .export-box textarea {
+    flex: 1;
+    min-height: 260px;
+    margin: 12px 16px;
+    background: var(--paper-raised);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    padding: 10px;
+    white-space: pre;
+  }
+  .export-actions { display: flex; gap: 10px; padding: 0 16px 16px; }
+  .flash {
+    position: fixed;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--ink);
+    color: var(--paper);
+    font-weight: 800;
+    font-size: 13px;
+    padding: 8px 18px;
+    box-shadow: 4px 4px 0 var(--shadow);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .flash.show { opacity: 1; }
+</style>
+
+<header>
+  <div class="brand"><b>Triage</b><span class="sub">BANZUKE</span></div>
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab" id="tab-triage" role="tab" aria-selected="true">Triage</button>
+    <button type="button" class="tab" id="tab-board" role="tab" aria-selected="false">Board</button>
+  </div>
+  <div class="head-right">
+    <span class="progress-note" id="progress-note"></span>
+    <button type="button" class="btn primary" id="btn-export">Export</button>
+    <button type="button" class="btn ghost" id="btn-reset">Reset</button>
+  </div>
+</header>
+<div class="bar"><i id="bar-fill"></i></div>
+
+<main>
+  <section id="triage">
+    <div class="queue-note" id="queue-note"></div>
+    <div class="big-card"><div class="title" id="current-title"></div></div>
+    <div class="pads" id="pads"></div>
+    <div class="aux">
+      <button type="button" class="btn" id="btn-later">Later</button>
+      <button type="button" class="btn" id="btn-undo">Undo</button>
+    </div>
+    <div class="key-hint"><b>Space</b> selects — once = the very bottom (Seen), and each press promotes it (past the top comes "Excluded", then it wraps). <b>Enter</b> commits and moves on.<br><b>Enter</b> with nothing selected = "Seen" (the most frequent call gets the shortest path). <b>U</b> undo / <b>P</b> later / <b>Esc</b> clear the selection. Clicking a button commits immediately.</div>
+  </section>
+
+  <section id="board">
+    <div class="board-tools">
+      <input id="search" type="search" placeholder="Filter by title…" />
+      <span class="hint">Drag cards to move them between tiers or reorder them. On hover: ← (to the end of the tier on the left) / → (to the top of the tier on the right) / ⤵ (move this card and everything below it to the top of the next tier down). Double-click to rename a card, click a column name to rename the tier. F/R/W cycles the layout (featured / ranked / wall).</span>
+    </div>
+    <div class="cols" id="cols"></div>
+  </section>
+</main>
+
+<div id="export-overlay">
+  <div class="export-box">
+    <h2>data.mjs — paste this into chat, or download it into the project</h2>
+    <p>"Seen" is emitted as the final wall. "Excluded" and empty tiers are left out.</p>
+    <textarea id="export-text" spellcheck="false"></textarea>
+    <div class="export-actions">
+      <button type="button" class="btn primary" id="btn-copy">Copy to clipboard</button>
+      <button type="button" class="btn" id="btn-download">Download data.mjs</button>
+      <button type="button" class="btn ghost" id="btn-close" style="margin-left:auto">Close</button>
+    </div>
+  </div>
+</div>
+<div class="flash" id="flash"></div>
+
+<script>
+  const TITLES = /*__DATA__*/[];
+
+  const PALETTE = ["#d62828", "#1b50a8", "#f4c20d", "#2d8b5f", "#7b2d8b", "#e8720c", "#3a7ca5"];
+  const STORE_KEY = "banzuke-triage-v1";
+
+  const defaultState = () => ({
+    tiers: [
+      { name: "Hall of Fame", layout: "featured" },
+      { name: "Love it", layout: "ranked" },
+      { name: "Favorites", layout: "ranked" },
+      { name: "Good", layout: "wall" },
+      { name: "So-so", layout: "wall" },
+    ].map((t, i) => ({ ...t, color: PALETTE[i % PALETTE.length], items: [] })),
+    seen: [],
+    drop: [],
+    queue: TITLES.slice(),
+  });
+
+  let state = load();
+  let history = []; // {title, dest} — dest: tier index | "seen" | "drop" | "later"
+
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return defaultState();
+      const s = JSON.parse(raw);
+      // Reconcile so a title list that changed since the save does not break things
+      const known = new Set(lanesOf(s).flat());
+      const renamed = new Set(Object.keys(s.renames ?? {}));
+      for (const t of TITLES) if (!known.has(t) && !renamed.has(t)) s.queue.push(t);
+      return s;
+    } catch {
+      return defaultState();
+    }
+  }
+  function save() {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  }
+
+  // ── Shared helpers ──
+  const $ = (id) => document.getElementById(id);
+  const assigned = () => TITLES.length - state.queue.length;
+  /** Every lane's items array (tier order → seen → drop → queue). Titles are globally unique */
+  function lanesOf(s) {
+    return [...s.tiers.map((t) => t.items), s.seen, s.drop, s.queue];
+  }
+  function removeEverywhere(title) {
+    for (const arr of lanesOf(state)) {
+      const i = arr.indexOf(title);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  }
+  function renameTitle(oldT, newT) {
+    const lanes = lanesOf(state);
+    if (lanes.some((arr) => arr.includes(newT))) return false;
+    for (const arr of lanes) {
+      const i = arr.indexOf(oldT);
+      if (i < 0) continue;
+      arr[i] = newT;
+      // Keep an original-name → current-name mapping so old names do not come back on reload
+      state.renames ??= {};
+      const orig = Object.keys(state.renames).find((k) => state.renames[k] === oldT) ?? oldT;
+      if (orig === newT) delete state.renames[orig];
+      else state.renames[orig] = newT;
+      save();
+      return true;
+    }
+    return false;
+  }
+  function flash(msg) {
+    const el = $("flash");
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(flash._t);
+    flash._t = setTimeout(() => el.classList.remove("show"), 1400);
+  }
+  /** Two-step confirm button: the first press arms it and changes the label, a second press in time runs it */
+  function armConfirm(btn, armText, idleText, ms, run) {
+    if (btn.dataset.arm) {
+      btn.dataset.arm = "";
+      btn.textContent = idleText;
+      run();
+    } else {
+      btn.dataset.arm = "1";
+      btn.textContent = armText;
+      setTimeout(() => { btn.dataset.arm = ""; btn.textContent = idleText; }, ms);
+    }
+  }
+
+  // ── Triage view ──
+  function assign(dest) {
+    const title = state.queue[0];
+    if (!title) return;
+    state.queue.shift();
+    if (dest === "seen") state.seen.push(title);
+    else if (dest === "drop") state.drop.push(title);
+    else if (dest === "later") state.queue.push(title);
+    else state.tiers[dest].items.push(title);
+    history.push({ title, dest });
+    sel = null;
+    save();
+    renderAll();
+  }
+  function undo() {
+    const last = history.pop();
+    if (!last) return;
+    removeEverywhere(last.title);
+    state.queue.unshift(last.title);
+    save();
+    renderAll();
+  }
+
+  function renderTriage() {
+    const title = state.queue[0];
+    const el = $("current-title");
+    if (title) {
+      el.textContent = title;
+      el.className = "title";
+      el.style.fontSize = title.length > 24 ? "30px" : title.length > 14 ? "38px" : "48px";
+    } else {
+      el.textContent = "Queue empty — finish up on the board, then Export";
+      el.className = "title done-note";
+      el.style.fontSize = "18px";
+    }
+    $("queue-note").textContent = title ? `${state.queue.length} left` : "";
+
+    const pads = $("pads");
+    pads.innerHTML = "";
+    for (const spec of padSpecs()) {
+      const b = document.createElement("button");
+      b.className = `pad ${spec.cls ?? ""}`;
+      if (spec.color) b.style.borderLeftColor = spec.color;
+      b.innerHTML = `<span></span><span class="cnt"></span>`;
+      b.firstChild.textContent = spec.name;
+      b.querySelector(".cnt").textContent = spec.count;
+      b.addEventListener("click", () => assign(spec.dest));
+      pads.appendChild(b);
+    }
+    highlight();
+  }
+
+  // Display order of the destination buttons (tiers top-down + Seen + Excluded).
+  // Shared source for both rendering and highlight
+  const padSpecs = () => [
+    ...state.tiers.map((t, i) => ({ dest: i, name: t.name, color: t.color, count: t.items.length })),
+    { dest: "seen", name: "Seen", cls: "neutral", count: state.seen.length },
+    { dest: "drop", name: "Excluded", cls: "drop", count: state.drop.length },
+  ];
+
+  let sel = null; // destination currently selected with Space: 0..tiers-1 | "seen" | "drop"
+  // Assuming lower tiers hold the most items: one Space = the bottom tier, each press moves up.
+  // Seen is Enter on its own (zero presses), so it is not in the cycle. Excluded comes last.
+  const selTargets = () => ["seen", ...[...state.tiers.keys()].reverse(), "drop"];
+  function highlight() {
+    // Buttons are in display order; they map by dest, independently of the cycle order (selTargets)
+    const dests = padSpecs().map((s) => s.dest);
+    document.querySelectorAll("#pads .pad").forEach((p, i) => {
+      p.classList.toggle("selected", sel !== null && dests[i] === sel);
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, textarea, [contenteditable]")) return;
+    if ($("board").style.display === "flex") return;
+    if (e.key === " ") {
+      e.preventDefault();
+      const targets = selTargets();
+      sel = targets[(targets.indexOf(sel) + 1) % targets.length];
+      highlight();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      assign(sel === null ? "seen" : sel);
+    } else if (e.key === "Escape") {
+      sel = null;
+      highlight();
+    } else if (e.key === "p") assign("later");
+    else if (e.key === "u") undo();
+  });
+  $("btn-later").addEventListener("click", () => assign("later"));
+  $("btn-undo").addEventListener("click", undo);
+
+  // ── Board view ──
+  let dragTitle = null;
+  let dragGhost = null;
+
+  function laneOf(key) {
+    if (key === "seen") return state.seen;
+    if (key === "drop") return state.drop;
+    if (key === "queue") return state.queue;
+    return state.tiers[key].items;
+  }
+
+  function makeCard(title, tierColor, rank, actions) {
+    const c = document.createElement("div");
+    c.className = "card";
+    c.draggable = true;
+    c.dataset.title = title;
+    if (tierColor) c.style.setProperty("--tier-color", tierColor);
+    if (rank) c.innerHTML = `<span class="rank">${rank}</span>`;
+    c.appendChild(document.createTextNode(title));
+    if (actions?.length) {
+      const acts = document.createElement("div");
+      acts.className = "acts";
+      for (const a of actions) {
+        const b = document.createElement("button");
+        b.textContent = a.text;
+        b.title = a.label;
+        b.draggable = false;
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          a.run();
+        });
+        acts.appendChild(b);
+      }
+      c.appendChild(acts);
+    }
+    c.addEventListener("dragstart", () => {
+      dragTitle = title;
+      c.classList.add("dragging");
+      dragGhost = c.cloneNode(true);
+      dragGhost.classList.remove("dragging");
+      dragGhost.classList.add("ghost");
+      dragGhost.draggable = false;
+      // Hide the source card a beat later (removing it instantly aborts the browser's drag)
+      requestAnimationFrame(() => c.classList.add("drag-hidden"));
+    });
+    c.addEventListener("dragend", () => {
+      dragTitle = null;
+      c.classList.remove("dragging", "drag-hidden");
+      dragGhost?.remove();
+      dragGhost = null;
+    });
+    c.addEventListener("dblclick", () => {
+      if (c.querySelector("input")) return;
+      c.draggable = false;
+      const input = document.createElement("input");
+      input.className = "card-edit";
+      input.value = title;
+      c.textContent = "";
+      c.appendChild(input);
+      input.focus();
+      input.select();
+      let finished = false;
+      const done = (commit) => {
+        if (finished) return;
+        finished = true;
+        const v = input.value.trim();
+        if (commit && v && v !== title && !renameTitle(title, v)) {
+          flash("A card with that name already exists");
+        }
+        renderAll();
+      };
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") { e.preventDefault(); done(true); }
+        else if (e.key === "Escape") done(false);
+      });
+      input.addEventListener("blur", () => done(true));
+    });
+    return c;
+  }
+
+  function makeColumn(key, name, color, items, opts = {}) {
+    const col = document.createElement("div");
+    col.className = `col ${opts.cls ?? ""}`;
+    col.dataset.lane = String(key);
+    const head = document.createElement("div");
+    head.className = "col-head";
+    const nameEl = document.createElement("span");
+    nameEl.className = "name";
+    nameEl.textContent = name;
+    if (opts.editable) {
+      nameEl.contentEditable = "plaintext-only";
+      nameEl.spellcheck = false;
+      nameEl.addEventListener("blur", () => {
+        const v = nameEl.textContent.trim();
+        if (v) state.tiers[key].name = v;
+        save();
+        renderAll();
+      });
+      nameEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); nameEl.blur(); }
+      });
+    }
+    head.appendChild(nameEl);
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = items.length;
+    head.appendChild(n);
+    if (opts.layoutChip) {
+      const chip = document.createElement("button");
+      chip.className = "chip";
+      chip.title = "Cycle layout: featured → ranked → wall";
+      chip.textContent = { featured: "F big", ranked: "R cols", wall: "W wall" }[state.tiers[key].layout];
+      chip.addEventListener("click", () => {
+        const order = ["featured", "ranked", "wall"];
+        const t = state.tiers[key];
+        t.layout = order[(order.indexOf(t.layout) + 1) % 3];
+        save();
+        renderAll();
+      });
+      head.appendChild(chip);
+    }
+    if (opts.deletable) {
+      const del = document.createElement("button");
+      del.className = "del";
+      del.title = "Delete tier (its cards go to Seen)";
+      del.textContent = "×";
+      del.addEventListener("click", () =>
+        armConfirm(del, "Delete?", "×", 1600, () => {
+          const t = state.tiers[key];
+          state.seen.push(...t.items);
+          state.tiers.splice(key, 1);
+          save();
+          renderAll();
+        }),
+      );
+      head.appendChild(del);
+    }
+    col.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "col-body";
+    const showRank = opts.ranked;
+    // Destination chain for ←/→/⤵: the tier columns → Seen → Excluded. This column's position
+    // is found by array identity (the Unsorted queue is not in the chain → no arrows)
+    const chain = [
+      ...state.tiers.map((t) => ({ name: t.name, arr: t.items })),
+      { name: "Seen", arr: state.seen },
+      { name: "Excluded", arr: state.drop },
+    ];
+    const chainIdx = chain.findIndex((l) => l.arr === items);
+    items.forEach((t, i) => {
+      const actions = [];
+      if (chainIdx > 0) {
+        const dest = chain[chainIdx - 1];
+        actions.push({
+          text: "←",
+          label: `To the end of ${dest.name}`,
+          run: () => {
+            chain[chainIdx].arr.splice(i, 1);
+            dest.arr.push(t);
+            save();
+            renderAll();
+            flash(`Moved to the end of ${dest.name}`);
+          },
+        });
+      }
+      if (chainIdx >= 0 && chainIdx < chain.length - 1) {
+        const dest = chain[chainIdx + 1];
+        actions.push({
+          text: "→",
+          label: `To the top of ${dest.name}`,
+          run: () => {
+            chain[chainIdx].arr.splice(i, 1);
+            dest.arr.unshift(t);
+            save();
+            renderAll();
+            flash(`Moved to the top of ${dest.name}`);
+          },
+        });
+      }
+      if (typeof key === "number") {
+        const dest = chain[chainIdx + 1];
+        actions.push({
+          text: "⤵",
+          label: `Move this and everything below (${items.length - i}) to the top of ${dest.name}`,
+          run: () => {
+            const moved = chain[chainIdx].arr.splice(i);
+            dest.arr.unshift(...moved);
+            save();
+            renderAll();
+            flash(`Moved ${moved.length} to the top of ${dest.name}`);
+          },
+        });
+      }
+      body.appendChild(makeCard(t, color, showRank ? opts.rankBase + i : 0, actions));
+    });
+    body.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      if (!dragTitle || !dragGhost) return;
+      const cards = [...body.querySelectorAll(".card:not(.dragging):not(.ghost)")];
+      const after = cards.find(
+        (c) => e.clientY < c.getBoundingClientRect().top + c.offsetHeight / 2,
+      );
+      // Only move it when the position actually changes (avoids flicker)
+      if (after) {
+        if (dragGhost.nextElementSibling !== after || dragGhost.parentElement !== body) {
+          body.insertBefore(dragGhost, after);
+        }
+      } else if (dragGhost.parentElement !== body || dragGhost.nextElementSibling) {
+        body.appendChild(dragGhost);
+      }
+    });
+    body.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (!dragTitle) return;
+      const cards = [...body.querySelectorAll(".card:not(.dragging):not(.ghost)")];
+      let index = cards.length;
+      if (dragGhost?.parentElement === body) {
+        // number of cards ahead of the ghost = the insert position
+        index = cards.filter(
+          (c) => c.compareDocumentPosition(dragGhost) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).length;
+      }
+      removeEverywhere(dragTitle);
+      laneOf(key).splice(index, 0, dragTitle);
+      save();
+      renderAll();
+    });
+    col.appendChild(body);
+    return col;
+  }
+
+  function renderBoard() {
+    const cols = $("cols");
+    // Save the scroll positions so rebuilding does not jump them around
+    const scrollLeft = cols.scrollLeft;
+    const bodyScroll = {};
+    cols.querySelectorAll(".col").forEach((c) => {
+      bodyScroll[c.dataset.lane] = c.querySelector(".col-body").scrollTop;
+    });
+    cols.innerHTML = "";
+    if (state.queue.length > 0) {
+      cols.appendChild(makeColumn("queue", "Unsorted", null, state.queue, { cls: "lane-queue" }));
+    }
+    let rankBase = 1;
+    state.tiers.forEach((t, i) => {
+      const ranked = t.layout !== "wall";
+      cols.appendChild(
+        makeColumn(i, t.name, t.color, t.items, {
+          editable: true,
+          layoutChip: true,
+          deletable: true,
+          ranked,
+          rankBase,
+        }),
+      );
+      if (ranked) rankBase += t.items.length;
+    });
+    cols.appendChild(makeColumn("seen", "Seen", null, state.seen, { cls: "lane-seen" }));
+    cols.appendChild(makeColumn("drop", "Excluded", null, state.drop, { cls: "lane-drop" }));
+    const add = document.createElement("button");
+    add.className = "add-col";
+    add.title = "Add a tier";
+    add.textContent = "+";
+    add.addEventListener("click", () => {
+      state.tiers.push({
+        name: `tier ${state.tiers.length + 1}`,
+        color: PALETTE[state.tiers.length % PALETTE.length],
+        layout: "wall",
+        items: [],
+      });
+      save();
+      renderAll();
+    });
+    cols.appendChild(add);
+    // Restore the scroll positions
+    cols.scrollLeft = scrollLeft;
+    cols.querySelectorAll(".col").forEach((c) => {
+      if (bodyScroll[c.dataset.lane] !== undefined) {
+        c.querySelector(".col-body").scrollTop = bodyScroll[c.dataset.lane];
+      }
+    });
+    applySearch();
+    boardDirty = false;
+  }
+
+  function applySearch() {
+    const q = $("search").value.trim();
+    document.querySelectorAll("#cols .card").forEach((c) => {
+      c.classList.toggle("hidden", q !== "" && !c.dataset.title.includes(q));
+    });
+  }
+  $("search").addEventListener("input", applySearch);
+
+  // ── Tabs ──
+  function showView(which) {
+    $("triage").style.display = which === "triage" ? "flex" : "none";
+    $("board").style.display = which === "board" ? "flex" : "none";
+    $("tab-triage").setAttribute("aria-selected", which === "triage");
+    $("tab-board").setAttribute("aria-selected", which === "board");
+    if (which === "board" && boardDirty) renderBoard();
+  }
+  $("tab-triage").addEventListener("click", () => showView("triage"));
+  $("tab-board").addEventListener("click", () => showView("board"));
+
+  // ── Export ──
+  function buildDataMjs() {
+    const tiers = state.tiers
+      .filter((t) => t.items.length > 0)
+      .map((t) => ({ name: t.name, layout: t.layout, color: t.color, items: t.items }));
+    if (state.seen.length > 0) tiers.push({ name: "Seen", layout: "wall", items: state.seen });
+    const tierSrc = tiers
+      .map((t) => {
+        const items = t.items.map((i) => `      ${JSON.stringify(i)},`).join("\n");
+        const color = t.layout === "wall" ? "" : `\n      color: ${JSON.stringify(t.color)},`;
+        return `    {\n      name: ${JSON.stringify(t.name)},\n      layout: ${JSON.stringify(t.layout)},${color}\n      items: [\n${items}\n      ],\n    },`;
+      })
+      .join("\n");
+    return `// Exported from banzuke triage (${new Date().toISOString().slice(0, 10)})\nexport default {\n  title: "Anime Banzuke",\n  unit: "titles",\n  tiers: [\n${tierSrc}\n  ],\n};\n`;
+  }
+  $("btn-export").addEventListener("click", () => {
+    $("export-text").value = buildDataMjs();
+    $("export-overlay").style.display = "flex";
+  });
+  $("btn-close").addEventListener("click", () => { $("export-overlay").style.display = "none"; });
+  $("btn-copy").addEventListener("click", async () => {
+    const ta = $("export-text");
+    try {
+      await navigator.clipboard.writeText(ta.value);
+      flash("Copied — paste it into chat");
+    } catch {
+      ta.select();
+      document.execCommand("copy");
+      flash("Copied (fallback)");
+    }
+  });
+  $("btn-download").addEventListener("click", () => {
+    const blob = new Blob([$("export-text").value], { type: "text/javascript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "data.mjs";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // ── Reset ──
+  $("btn-reset").addEventListener("click", (e) =>
+    armConfirm(e.currentTarget, "This wipes everything — press again to confirm", "Reset", 2200, () => {
+      localStorage.removeItem(STORE_KEY);
+      state = defaultState();
+      history = [];
+      save();
+      renderAll();
+    }),
+  );
+
+  // ── Full render ──
+  let boardDirty = true;
+  function renderAll() {
+    const done = assigned();
+    $("progress-note").textContent = `${done} / ${TITLES.length}`;
+    $("bar-fill").style.width = `${(done / TITLES.length) * 100}%`;
+    renderTriage();
+    // Rebuild the board only while it is visible (do not rebuild hundreds of cards on every triage keypress)
+    if ($("board").style.display === "flex") renderBoard();
+    else boardDirty = true;
+  }
+  renderAll();
+  showView(state.queue.length === 0 ? "board" : "triage");
+</script>

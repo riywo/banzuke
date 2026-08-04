@@ -1,0 +1,5 @@
+# Display metadata for Codex (optional; has no effect on behavior)
+interface:
+  display_name: banzuke
+  short_description: "Generate and update banzuke tier-list ranking PNG sheets"
+  default_prompt: "Use $banzuke to create a tier-list ranking PNG"

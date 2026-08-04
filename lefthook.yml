@@ -1,0 +1,11 @@
+# https://lefthook.dev — runs Biome (format/lint) over the staged files on pre-commit.
+# `lefthook install` puts the git hooks in place (npm's prepare script runs it too).
+pre-commit:
+  parallel: true
+  jobs:
+    - name: biome
+      run: npx @biomejs/biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+      glob:
+        - "*.mjs"
+        - "*.json"
+      stage_fixed: true

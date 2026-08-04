@@ -1,0 +1,11 @@
+{
+  "name": "my-banzuke",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "dependencies": {
+    "takumi-js": "^2.5.4"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "banzuke",
+  "owner": {
+    "name": "Ryosuke Iwanaga",
+    "url": "https://github.com/riywo"
+  },
+  "plugins": [
+    {
+      "name": "banzuke",
+      "source": "./",
+      "description": "An Agent Skill that generates and updates banzuke (tier-list ranking) PNG images"
+    }
+  ]
+}

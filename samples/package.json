@@ -1,0 +1,16 @@
+{
+  "name": "banzuke-samples",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Builds the sample sheets shown in the README. The typefaces the samples use live here, not in the skill template — the template ships no font at all.",
+  "type": "module",
+  "scripts": {
+    "build": "node build/all.mjs"
+  },
+  "dependencies": {
+    "@fontpkg/source-han-sans-jp-vf": "2.5.2",
+    "@fontsource-variable/bodoni-moda": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/oswald": "5.3.0"
+  }
+}

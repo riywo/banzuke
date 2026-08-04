@@ -1,0 +1,31 @@
+{
+  "name": "banzuke",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An agent skill that renders banzuke (tier-ranking sheets) to PNG without a browser. template/ is a complete self-contained project scaffold (lib, package.json and lock included), and the output stays in the user's hands.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "test": "node --test",
+    "samples": "node samples/build/all.mjs",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome check --write .",
+    "prepare": "lefthook install"
+  },
+  "workspaces": [
+    "samples"
+  ],
+  "dependencies": {
+    "takumi-js": "^2.5.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.0",
+    "@fontsource-variable/archivo": "5.3.0",
+    "@types/node": "^25.9.3",
+    "lefthook": "2.1.9"
+  }
+}

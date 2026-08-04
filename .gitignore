@@ -1,0 +1,33 @@
+node_modules/
+.direnv/
+# nix build output symlink
+result
+result-*
+*.log
+# rendered outputs
+*.png
+*.html
+# the samples shown in the README are tracked
+!samples/*.png
+# the triage UI bundled with the skill is an asset, not an output
+!skills/banzuke/triage.html
+# test scratch
+test/.tmp/
+# sandbox device files (Claude Code worktree)
+.bash_profile
+.bashrc
+.claude/
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofile
+.zshrc
+# zip built for distributing the skill
+*.zip
+
+# personal banzuke workspace (not part of the skill itself)
+/my-banzuke/
