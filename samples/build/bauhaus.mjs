@@ -73,9 +73,12 @@ async function rankedTier(tier, height, width, isLast) {
   const rows = Math.ceil(n / RANK_COLS);
   const from = Math.min(30, Math.round(((height - HDR_H) / rows) * 0.63));
   const sizes = ramp(from, Math.round(from * 0.78), n);
+  // Split the size ramp with the same helper as the items, so the two cannot drift apart when
+  // columns() hands back columns of unequal length.
+  const sizeCols = columns(sizes, RANK_COLS);
   const cols = await Promise.all(
     columns(tier.items, RANK_COLS).map((chunk, c) =>
-      rowColumn(chunk, sizes.slice(c * rows, (c + 1) * rows), width / RANK_COLS, tier.color),
+      rowColumn(chunk, sizeCols[c], width / RANK_COLS, tier.color),
     ),
   );
   const sizing = isLast
@@ -90,12 +93,16 @@ async function rankedTier(tier, height, width, isLast) {
 async function wall(tier, size, cols) {
   const gutter = 8;
   const colW = (INNER_W - 2 * PAD - (cols - 1) * (2 * gutter + SEP)) / cols;
+  // One line per item — scaleX does not shrink the span's layout width, so a squashed title
+  // still overflows the column and would otherwise take two line boxes (which is also what
+  // wallH() below assumes it never does).
+  const rowH = Math.round(size * LINE);
   const blocks = await Promise.all(
     columns(tier.items, cols).map(async (chunk, c) => {
       const lines = await Promise.all(
         chunk.map(async ({ title }) => {
           const span = await fitT(title, { size, avail: colW, stretch: 2 });
-          return `<div style="padding:1px 0;font-size:${size}px;line-height:${LINE};overflow:hidden">${span}</div>`;
+          return `<div style="height:${rowH}px;padding:1px 0;font-size:${size}px;line-height:${LINE};overflow:hidden">${span}</div>`;
         }),
       );
       const rule = c > 0 ? `border-left:${SEP}px solid ${T.rule};padding-left:${gutter}px;` : "";

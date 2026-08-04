@@ -158,16 +158,17 @@ async function rowColumn({ items, startRank, sizes, colW, color, stretch }) {
 async function rankedTier({ tier, startRank, height, width, isLast }) {
   const n = tier.items.length;
   const cols = Math.min(RANK_COLS, Math.max(1, n));
-  const rows = Math.ceil(n / cols);
+  const rows = Math.ceil(n / cols); // tallest column, which is what sets the row height
   const sizes = tierSizes("ranked", (height - HDR_H) / rows, n);
   const colW = width / cols;
   const color = tier.color ?? T.accent;
+  const start = colSplit(n, cols);
   const columns = await Promise.all(
     Array.from({ length: cols }, (_, c) =>
       rowColumn({
-        items: tier.items.slice(c * rows, (c + 1) * rows),
-        startRank: startRank + c * rows,
-        sizes: sizes.slice(c * rows, (c + 1) * rows),
+        items: tier.items.slice(start(c), start(c + 1)),
+        startRank: startRank + start(c),
+        sizes: sizes.slice(start(c), start(c + 1)),
         colW,
         color,
         stretch: TYPE.ranked.stretch,
@@ -187,16 +188,20 @@ async function rankedTier({ tier, startRank, height, width, isLast }) {
 async function wallTier(tier, size) {
   const names = tier.items.map(titleOf);
   const cols = wallCols(names.length, size * WALL.em);
-  const per = Math.ceil(names.length / cols);
+  const start = colSplit(names.length, cols);
   const gutter = 8;
   const colW = (INNER - 2 * PAD - (cols - 1) * (2 * gutter + SEP)) / cols;
+  // One line per item. fitSpan squashes with scaleX, which does not shrink the span's *layout*
+  // width, so a shrunk title still overflows the column and would take two line boxes — leaving
+  // a blank line mid-column and columns that end at different heights.
+  const rowH = Math.round(size * LINE);
   const columns = await Promise.all(
     Array.from({ length: cols }, async (_, c) => {
-      const chunk = names.slice(c * per, (c + 1) * per);
+      const chunk = names.slice(start(c), start(c + 1));
       const items = await Promise.all(
         chunk.map(async (name) => {
           const span = await fitT(name, { size, avail: colW, stretch: WALL.stretch });
-          return `<div style="padding:1px 0;font-size:${size}px;line-height:${LINE};overflow:hidden">${span}</div>`;
+          return `<div style="height:${rowH}px;padding:1px 0;font-size:${size}px;line-height:${LINE};overflow:hidden">${span}</div>`;
         }),
       );
       const rule = c > 0 ? `border-left:${SEP}px solid ${T.rule};padding-left:${gutter}px;` : "";
@@ -209,6 +214,18 @@ async function wallTier(tier, size) {
     <div style="height:8px"></div>
     <div style="display:flex;align-items:flex-start;padding:0 ${PAD}px">${columns.join("")}</div>
   </div>`;
+}
+
+/**
+ * Column boundaries for `n` items over `cols` columns: `start(c)` → the index column c begins at.
+ * The remainder is dealt one row at a time across the leading columns rather than all landing in
+ * the last one (128 over 9 columns is 15×8 + 8, which ends the tier on a stub column).
+ * The tallest column is still `ceil(n / cols)`, so height math built on that holds.
+ */
+function colSplit(n, cols) {
+  const base = Math.floor(n / cols);
+  const extra = n % cols;
+  return (c) => c * base + Math.min(c, extra);
 }
 
 /** Wall column count: split the same way an em-width-based multicol would */
@@ -279,11 +296,11 @@ export async function sheet() {
   const rankedWeights = ranked.map((_, i) => TIER_WEIGHT ** (ranked.length - 1 - i));
   const weightedRows = rankedRows.reduce((sum, r, i) => sum + r * rankedWeights[i], 0);
   const rankedFixed = ranked.length * HDR_H + Math.max(0, ranked.length - 1) * DIV;
+  const featBandH = Math.round(HDR_H + featRows * FEAT_ROW_H);
   const rawUnit = featured
-    ? (Math.round(HDR_H + featRows * FEAT_ROW_H) - rankedFixed) / Math.max(1, weightedRows)
+    ? (featBandH - rankedFixed) / Math.max(1, weightedRows)
     : LONE_ROW_H / Math.max(...rankedWeights, 1);
   const unit = Math.max(rawUnit, MIN_RANK_UNIT);
-  const bandH = featured ? rankedFixed + Math.ceil(weightedRows * unit) : 0;
   const rankedHeights = rankedRows.map(
     (r, i) => HDR_H + Math.round(r * rankedWeights[i] * unit) + (i < ranked.length - 1 ? DIV : 0),
   );
@@ -310,6 +327,10 @@ export async function sheet() {
       color: featured.color ?? T.accent,
       stretch: TYPE.featured.stretch,
     });
+    // With no ranked tiers there is nothing on the right to size the band against — it is exactly
+    // the featured column. (Deriving it from weightedRows there gives 0, which collapses the band
+    // and drops the featured tier off the sheet entirely.)
+    const bandH = ranked.length > 0 ? rankedFixed + Math.ceil(weightedRows * unit) : featBandH;
     const border = ranked.length > 0 ? `border-right:${DIV}px solid ${T.ink};` : "";
     const rightSide =
       ranked.length > 0

@@ -90,8 +90,15 @@ export function dateLabel(now = new Date()) {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} edition`;
 }
 
-/** Deal items column-major into `cols` columns. */
+/**
+ * Deal items column-major into `cols` columns, the remainder spread one row at a time across the
+ * leading columns. A flat `ceil()` per column puts the whole remainder in the last one, which
+ * ends a wide wall on a stub column (128 over 9 columns = 15×8 + 8).
+ * The tallest column is still `ceil(items.length / cols)`, so height math built on that holds.
+ */
 export function columns(items, cols) {
-  const per = Math.ceil(items.length / cols);
-  return Array.from({ length: cols }, (_, c) => items.slice(c * per, (c + 1) * per));
+  const base = Math.floor(items.length / cols);
+  const extra = items.length % cols;
+  const start = (c) => c * base + Math.min(c, extra);
+  return Array.from({ length: cols }, (_, c) => items.slice(start(c), start(c + 1)));
 }
