@@ -122,8 +122,10 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
 
 ### 5. Glyph sanity
 
-- Any tofu (□)? → a glyph none of the registered fonts has. Change the wording or register a font
-  that covers it
+- Any tofu (□)? → a glyph none of the registered fonts has. In **data**, change the wording or
+  register a font that covers it. In the sheet's **own chrome**, delete the character — a rule or
+  bar wants a `div`. Look at the decoration too, not just the titles: a stray `──` is only a
+  couple of small boxes and reads as part of the design until you zoom in
 - **Are the descenders of g / y / p cut flat?** → the box has `overflow: hidden` and a line box
   shorter than the font's glyph box. Use `line-height: ${LINE}` on it — never a bare 1.05 or 0.9.
   A face with tall metrics (any CJK font) needs ~1.45
@@ -215,6 +217,10 @@ by trying all of them. Two consequences worth knowing:
 - Fontsource ships **one file per unicode subset**. Register **each subset under its own family
   name** (`"X"`, `"X Ext"`, …) and the fallback stitches the typeface back together. Registering
   only `latin` is what turns é and ř into tofu
+- **Those subsets cover text, not symbols.** A family is split into `latin`, `latin-ext`, `greek`,
+  `cyrillic(-ext)` and `vietnamese` — box drawing (U+2500+), arrows, dingbats and geometric shapes
+  sit in **none** of them, even for a coding face whose source TTF draws them. So there is no
+  subset to register for those: draw the shape with a `div` instead of typing the character
 - **Adding a script is just another registerFont.** Register a CJK face alongside the Latin one
   and Japanese titles resolve on their own — you never name it in `T.font`. The Latin and CJK
   glyphs will be two different typefaces, which usually reads fine; set the whole sheet in the
@@ -254,6 +260,8 @@ The renderer is takumi (written in Rust, successor to satori). It is not a brows
 - **Variable-length text goes through `fitSpan()`, plain text through `esc()`**
   (a missed escape shows up as broken or mangled output)
 - **Always specify font-weight** (an unstated weight renders far lighter than you expect)
+- **Draw rules, bars and dividers as a `div`** (`height:1px;background:…`), never as box-drawing
+  characters (`──`, `│`, `├`). No Fontsource subset ships those glyphs, so they render as tofu
 - **Any box that clips (`overflow: hidden`) needs an explicit `line-height`** — `LINE` in the
   template. A line box shorter than the font's glyph box crops descenders (g / y / p)
 - **Always put the generation date "YYYY-MM-DD edition" somewhere on the sheet** (so the version
