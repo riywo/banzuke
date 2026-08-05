@@ -95,8 +95,16 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
 
 - **Too much space inside rows** → raise `TYPE.*.rowFill`, or squeeze the tier height
   (`FEAT_ROW_H` ↓ / adjust `TIER_WEIGHT`)
-- **A tier with few items looks stretched** → if it is a deliberately small featured tier,
-  raise `FEAT_ROW_H` so each row stands proud. Reconsidering the tiering in the data also works
+- **The featured column is half empty** → **this is a data problem, and no knob fixes it.** The
+  top band's height is set by the *ranked* tiers beside it, not by the featured tier, so the only
+  thing that fills the featured column is how many items are in it. On a typical sheet (three
+  ranked tiers alongside), 1 item fills ~27% of the column, 2 ~44%, 3 ~61%, 4 ~78%, 5 ~95% —
+  so **aim for 4–6 featured items**. Raising `FEAT_ROW_H` does not rescue a lone item: the row
+  gets taller but `TYPE.featured.cap` holds the text at its size, so you get one tall, mostly
+  empty box. Promote more titles into the tier, or drop `layout: "featured"` entirely and let #1
+  lead the top ranked tier
+- **A ranked or wall tier looks stretched** → re-tier in the data: merge it with its neighbour,
+  or move its tail into the wall
 - **Wall columns end at ragged heights** → adjust `WALL.em` or the number of items
 - **Font too thin, sheet looks washed out** → raise `T.weight` (250–900, continuously variable)
 
