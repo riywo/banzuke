@@ -105,12 +105,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Pinned rather than `auto`: auto routed the first run to gpt-5-mini, which built a
-          # correct sheet but never opened the PNG — it stopped at "it ran", which is the one
-          # thing SKILL.md tells it not to do. Pinning also keeps the verdict comparable between
-          # runs, since auto re-routes per session.
+          # `auto` re-routes per session, so the verdict is not strictly comparable between runs
+          # — check.mjs records which model was chosen so a result can be read in context.
+          # Pinning would be better, but --model is validated against the account's live model
+          # catalog, which is narrower than the router's candidates: `claude-haiku-4.5` appears
+          # in the router's availableModels and is still rejected as "not available" here.
           copilot -p "$(cat prompt.txt)" \
-            --model "${{ inputs.model || 'claude-haiku-4.5' }}" \
+            --model "${{ inputs.model || 'auto' }}" \
             --output-format json \
             --yolo \
             --no-ask-user \
