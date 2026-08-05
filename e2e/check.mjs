@@ -117,14 +117,10 @@ assert.deepEqual(
 // SKILL.md requires the generation date on every sheet, however the layout gets rewritten.
 assert.match(html, /\d{4}-\d{2}-\d{2} edition/, "no 'YYYY-MM-DD edition' label on the sheet");
 
-// ---------- the transcript shows the PNG was looked at ----------
-//
-// That the skill itself was reached is settled elsewhere and more cheaply: the workflow's
-// `copilot skill list` preflight proves it is discoverable, and the project above is built out
-// of the skill's own lib/ — whose API this file just imported — which no agent improvises.
+// ---------- what the transcript says the agent actually did ----------
 
 // The workflow always tees one out, so a missing transcript means the run itself broke rather
-// than that there is nothing to check — fail instead of quietly dropping the assertion below.
+// than that there is nothing to check — fail instead of quietly dropping the assertions below.
 const transcript = path.join(work, "transcript.jsonl");
 assert.ok(existsSync(transcript), `no transcript.jsonl in ${work} — the agent step did not run`);
 
@@ -138,26 +134,50 @@ const events = readFileSync(transcript, "utf8")
       return [];
     }
   });
+const firstData = (type) => events.find((e) => e.type === type)?.data ?? {};
 
-// Copilot CLI's `--output-format json` emits tool_call_requested / tool_call_completed entries.
-// Match on the serialized event rather than named fields, so a schema change surfaces as a clear
-// failure here instead of a silent pass.
-const calls = events.filter((e) => String(e.type ?? "").includes("tool_call"));
-assert.ok(calls.length > 0, `the transcript (${events.length} events) records no tool calls`);
+// Copilot CLI's `--output-format json` is a dotted-type event stream. `tool.execution_start` is
+// the real invocation, carrying the tool name and its complete arguments. Do NOT match on a
+// "tool_call" substring: `assistant.tool_call_delta` also matches, but each one holds a single
+// streaming fragment of the arguments, so a path is smeared across hundreds of events and can
+// never be found in any one of them.
+const calls = events.filter((e) => e.type === "tool.execution_start").map((e) => e.data ?? {});
+assert.ok(calls.length > 0, `the transcript (${events.length} events) records no tool executions`);
+const argsOf = (c) => Object.values(c.arguments ?? {}).filter((v) => typeof v === "string");
 
-// Only the requesting half of a call: the completed half carries the tool's *output*, and
-// reading SKILL.md would pull "banzuke.png" in with it as a false positive.
-const requests = calls
-  .filter((e) => e.type !== "tool_call_completed")
-  .map((e) => JSON.stringify(e));
+// Discoverability is only half of it — the description also has to actually fire.
 assert.ok(
-  requests.some((json) => json.includes(".png")),
-  "no tool call touched the PNG — the eyeball step in SKILL.md was skipped",
+  firstData("session.skills_loaded").skills?.some((s) => s.name === "banzuke"),
+  "the banzuke skill never loaded into the session",
+);
+assert.ok(
+  calls.some((c) => c.toolName === "skill" && JSON.stringify(c.arguments).includes("banzuke")),
+  "the agent never invoked the banzuke skill — the SKILL.md description did not trigger",
+);
+
+// An argument that *is* a path to the PNG, rather than any mention of one: this is the agent
+// opening the image, not a shell line that happens to name it.
+assert.ok(
+  calls.some((c) => argsOf(c).some((v) => v.trimEnd().endsWith(".png"))),
+  "the agent never opened the PNG — the eyeball step in SKILL.md was skipped",
 );
 
 // SKILL.md offers bun and deno alongside node, so do not count only one of them.
-const renders = requests.filter((j) => /\b(node|bun|deno)\s+\S*banzuke[\w-]*\.mjs/.test(j)).length;
+const renders = calls.filter((c) =>
+  argsOf(c).some((v) => /\b(node|bun|deno)\s+\S*banzuke[\w-]*\.mjs/.test(v)),
+).length;
 note(`transcript: ${events.length} events, ${calls.length} tool calls, ${renders} renders`);
+
+const result = events.findLast((e) => e.type === "result") ?? {};
+if (result.exitCode !== undefined) {
+  assert.equal(result.exitCode, 0, `the agent session exited ${result.exitCode}`);
+}
+// `auto` picks per session, so record which model this verdict actually describes.
+const model = firstData("session.auto_mode_resolved").chosenModel ?? calls[0]?.model ?? "unknown";
+const { premiumRequests, sessionDurationMs } = result.usage ?? {};
+note(
+  `session: ${model}, ${Math.round((sessionDurationMs ?? 0) / 1000)}s, ${premiumRequests ?? "?"} premium requests`,
+);
 
 // ---------- report ----------
 
