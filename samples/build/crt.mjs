@@ -75,7 +75,7 @@ export default async function build() {
 
     blocks.push(`<div style="flex:none">
       <div style="height:${RULE_H}px;display:flex;align-items:center;color:${T.amber};font-size:15px;font-weight:700;line-height:1.3">
-        <span style="letter-spacing:-1px">──</span>
+        <span style="width:20px;flex:none;height:1px;background:${T.amber};opacity:0.45"></span>
         <span style="padding:0 10px">${esc(p.name)} (${p.items.length})</span>
         <span style="flex:1;height:1px;background:${T.amber};opacity:0.45"></span>
       </div>
