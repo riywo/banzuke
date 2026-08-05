@@ -15,6 +15,11 @@ import { fit } from "./measure.mjs";
  *
  * font-size / font-weight / font-family / letter-spacing are all stated on the span itself
  * (never inherited from a parent) so the measured and drawn conditions cannot drift apart.
+ *
+ * scaleX shrinks what is *drawn*, not what is *laid out*: a squashed span still occupies its
+ * natural width, so it can overflow the box you sized to `avail`. Give any box holding a fitSpan
+ * an explicit height (or a flex context that fixes it) — left to size itself it can take a second
+ * line box and push everything below it down.
  */
 export async function fitSpan(
   text,

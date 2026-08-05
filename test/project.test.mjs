@@ -67,6 +67,83 @@ test("variants: a copy with different colors stays independent of the original",
   );
 });
 
+/** A data.mjs source string for the given tiers. */
+const project = (tiers) =>
+  `export default ${JSON.stringify({ title: "Test", unit: "titles", tiers }, null, 2)};\n`;
+
+const FEATURED = { name: "Top", layout: "featured", color: "#d62828", items: ["One", "Two"] };
+const RANKED = { name: "Ranked", layout: "ranked", color: "#1b50a8", items: ["R1", "R2", "R3"] };
+const wall = (items) => ({ name: "Wall", layout: "wall", items });
+
+/**
+ * Items per wall column, read back off the generated HTML. Everything from the wall block's
+ * opening tag onward is wall columns (plus the footer, which matches neither marker) — the
+ * numbered tiers above it use the same `flex:1;min-width:0` on their title cells.
+ */
+function wallColumnCounts(html) {
+  return html
+    .slice(html.indexOf('padding-bottom:10px">'))
+    .split('<div style="flex:1;min-width:0;')
+    .slice(1)
+    .map((col) => col.split("padding:1px 0;font-size:").length - 1);
+}
+
+test("wall: every item box is pinned to exactly one line", () => {
+  const dir = scaffold("proj-wall-oneline");
+  const titles = Array.from({ length: 30 }, (_, i) => `Item ${i + 1}`);
+  titles[3] = "A wall title far too long to ever fit inside one column";
+  writeFileSync(path.join(dir, "data.mjs"), project([FEATURED, RANKED, wall(titles)]));
+  runScript(path.join(dir, "banzuke.mjs"));
+
+  // fitSpan squashes with scaleX, which leaves the span's *layout* width untouched, so a shrunk
+  // title still overflows its column. Left to size itself the box then takes a second line box —
+  // a blank line mid-column and columns that end at ragged heights. Only an explicit height,
+  // paired with the overflow:hidden already there, rules that out.
+  const boxes = [
+    ...readFileSync(path.join(dir, "banzuke.html"), "utf8").matchAll(
+      /<div style="height:([\d.]+)px;padding:1px 0;font-size:([\d.]+)px;line-height:([\d.]+);overflow:hidden">/g,
+    ),
+  ];
+  assert.equal(boxes.length, 30);
+  for (const [, h, size, line] of boxes) {
+    assert.equal(Number(h), Math.round(Number(size) * Number(line)));
+  }
+});
+
+test("wall: the remainder is spread across columns, not dumped in the last one", () => {
+  const dir = scaffold("proj-wall-split");
+  const titles = Array.from({ length: 30 }, (_, i) => `Item ${i + 1}`);
+  writeFileSync(path.join(dir, "data.mjs"), project([FEATURED, RANKED, wall(titles)]));
+  runScript(path.join(dir, "banzuke.mjs"));
+
+  const counts = wallColumnCounts(readFileSync(path.join(dir, "banzuke.html"), "utf8"));
+  assert.equal(
+    counts.reduce((a, b) => a + b, 0),
+    30,
+  );
+  assert.equal(Math.max(...counts) - Math.min(...counts), 1); // 30 over 4 columns = 8,8,7,7
+});
+
+test("a featured tier with no ranked tier still gets its band", () => {
+  const dir = scaffold("proj-feat-only");
+  const featured = { ...FEATURED, items: ["One", "Two", "Three"] };
+  writeFileSync(
+    path.join(dir, "data.mjs"),
+    project([featured, wall(["A", "B", "C", "D", "E", "F"])]),
+  );
+  runScript(path.join(dir, "banzuke.mjs"));
+
+  // The band used to be sized off the (absent) ranked tiers, collapsing to 0px and dropping every
+  // featured row off the sheet.
+  const html = readFileSync(path.join(dir, "banzuke.html"), "utf8");
+  // border-bottom:4px is DIV — the masthead above it closes with BW (8px).
+  const band = html.match(/height:(\d+)px;flex:none;display:flex;border-bottom:4px/);
+  assert.ok(band, "no top band in the output");
+  assert.ok(Number(band[1]) > 100, `band height ${band[1]}px`);
+  for (const title of ["One", "Two", "Three"]) assert.match(html, new RegExp(`>${title}</span>`));
+  assert.ok(sizeOf(path.join(dir, "banzuke.png")).height > 700);
+});
+
 test("template ships with its lock and package.json", () => {
   const pkg = JSON.parse(
     readFileSync(path.join(root, "skills/banzuke/template/package.json"), "utf8"),

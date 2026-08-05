@@ -112,6 +112,11 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
 - **Stretched until it looks empty** → lower `stretch` there (default: rows 1.5 / wall 2)
 - **Overflowing or clipped** → fitSpan's `avail` disagrees with the real layout width. Check that
   you subtracted padding, spine, number width and rules
+- **A blank line appears after a squashed title, or a column ends taller than its neighbours** →
+  scaleX shrinks what is *drawn*, not what is *laid out*, so a squashed span still occupies its
+  natural width and its box can take a second line box. **Any box holding a fitSpan needs a fixed
+  height** — an explicit `height` (the wall rows do this) or a flex context that pins it
+  (`flex:1` + `min-height:0`, which the numbered rows do)
 - To add tracking, **pass it to fitSpan's `letterSpacing` option**
   (inheriting it from an outer style desyncs it from the measurement, which is what causes squashing and overflow)
 
