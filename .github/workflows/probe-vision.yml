@@ -1,0 +1,103 @@
+# TEMPORARY DIAGNOSTIC — delete once it has answered its question.
+#
+# The agent e2e keeps failing because the agent never opens the rendered PNG, even after SKILL.md
+# was rewritten to make that a hard gate. Two explanations remain: the instruction is still not
+# landing, or the model routed by `auto` cannot see images at all. This tells them apart.
+#
+# It renders a sheet containing a phrase that exists nowhere else, copies *only* the PNG into an
+# otherwise empty directory, and asks the agent to read the phrase back. There is no source file
+# to cheat from, so the answer can only come from the pixels. Two signals come out:
+#   attempted — did it call a tool with the image as a path argument?
+#   succeeded — did it report the phrase?
+name: probe (can the agent see a PNG?)
+
+on:
+  push:
+    paths:
+      - ".github/workflows/probe-vision.yml"
+
+permissions:
+  contents: read
+  copilot-requests: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SECRET_PHRASE: Vermilion Pangolin 7391
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - run: npm install -g @github/copilot
+
+      - name: Render a sheet whose text exists nowhere but in the pixels
+        run: |
+          build="$RUNNER_TEMP/build"
+          cp -r skills/banzuke/template "$build"
+          cd "$build"
+          npm ci --silent --no-audit --no-fund
+          npm i --silent @fontsource-variable/archivo
+          cat > data.mjs <<EOF
+          export default {
+            title: "Probe Sheet",
+            unit: "items",
+            tiers: [
+              { name: "Read This", layout: "featured", color: "#d62828",
+                items: ["$SECRET_PHRASE"] },
+            ],
+          };
+          EOF
+          node banzuke.mjs
+          # only the image travels — no data.mjs, no HTML, nothing to read the phrase out of
+          probe="$RUNNER_TEMP/probe"
+          mkdir -p "$probe"
+          cp banzuke.png "$probe/sheet.png"
+          echo "PROBE=$probe" >> "$GITHUB_ENV"
+          ls -la "$probe"
+
+      - name: Ask the agent what the image says
+        working-directory: ${{ env.PROBE }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Deliberately not --yolo: --allow-all-tools keeps path verification on, so the agent
+          # stays in this directory and cannot wander into the checkout to find the phrase.
+          copilot -p "Open the image file sheet.png in this directory and look at it. Reply with the exact text printed inside the image, and nothing else. Do not run shell commands." \
+            --output-format json --allow-all-tools --no-ask-user --no-color --disable-builtin-mcps \
+            | tee transcript.jsonl
+
+      - name: Verdict
+        working-directory: ${{ env.PROBE }}
+        run: |
+          node <<'EOF'
+          const fs = require("node:fs");
+          const phrase = process.env.SECRET_PHRASE;
+          const events = fs.readFileSync("transcript.jsonl", "utf8").split("\n").filter(Boolean)
+            .flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+          const calls = events.filter((e) => e.type === "tool.execution_start").map((e) => e.data ?? {});
+          const pathArgs = (c) => Object.entries(c.arguments ?? {})
+            .filter(([k]) => /^(path|file_?path|file|filename)$/i.test(k))
+            .map(([, v]) => v).filter((v) => typeof v === "string");
+
+          const attempted = calls.some((c) => pathArgs(c).some((v) => v.trimEnd().endsWith(".png")));
+          const said = events.filter((e) => e.type === "assistant.message")
+            .map((e) => JSON.stringify(e.data ?? {})).join(" ");
+          const succeeded = said.includes(phrase);
+          const model = events.find((e) => e.type === "session.auto_mode_resolved")?.data?.chosenModel
+            ?? calls[0]?.model ?? "unknown";
+
+          console.log(`model:     ${model}`);
+          console.log(`tools:     ${calls.map((c) => c.toolName).join(" → ") || "(none)"}`);
+          console.log(`attempted: ${attempted}   (opened the PNG as a path)`);
+          console.log(`succeeded: ${succeeded}   (reported the phrase)`);
+          console.log(`\nverdict: ${
+            succeeded ? "CAN SEE — wording is the problem, not capability"
+            : attempted ? "TRIED AND FAILED — the tool accepts the image but the model gets nothing useful"
+            : "DID NOT TRY — cannot or will not open images"}`);
+          EOF
