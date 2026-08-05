@@ -1,0 +1,61 @@
+name: release skill zip
+
+# Rolling release: the `latest` tag/release always points at main's HEAD and
+# carries banzuke.zip, the skill directory zipped for upload to claude.ai.
+# No versions or tags to manage — every push to main republishes.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Newest push wins: an in-progress run is cancelled and the new one republishes
+# from the newer commit.
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # git archive keeps it to tracked files only, so no node_modules or
+      # rendered output can leak in. claude.ai wants banzuke/ as the top-level
+      # folder with SKILL.md directly inside it.
+      - name: Build banzuke.zip
+        run: |
+          git archive --format=zip --prefix=banzuke/ -o banzuke.zip HEAD:skills/banzuke
+          unzip -l banzuke.zip
+          unzip -p banzuke.zip banzuke/SKILL.md | grep -q '^name: banzuke$'
+
+      # Neither half needs the other — gh creates the `latest` tag itself if the
+      # push hasn't landed yet — so run them concurrently. `parallel` waits for
+      # the whole group before continuing, so one half failing can't cut the
+      # other off mid-upload.
+      - parallel:
+          - name: Move the latest tag to this commit
+            run: git push -f origin "${GITHUB_SHA}:refs/tags/latest"
+
+          - name: Publish the latest release
+            env:
+              GH_TOKEN: ${{ github.token }}
+            run: |
+              notes=$(cat <<EOF
+              The banzuke skill as of [\`${GITHUB_SHA:0:7}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}) on \`main\`. This release is rebuilt on every push, so the link below is always current:
+
+              <https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/banzuke.zip>
+
+              Download \`banzuke.zip\` and upload it on claude.ai under Settings → Capabilities → Skills. Every other install route is in the [README](https://github.com/${GITHUB_REPOSITORY}#install).
+              EOF
+              )
+              if gh release view latest >/dev/null 2>&1; then
+                gh release upload latest banzuke.zip --clobber
+                gh release edit latest --notes "$notes" --latest
+              else
+                gh release create latest banzuke.zip --target "$GITHUB_SHA" --title latest --notes "$notes" --latest
+              fi

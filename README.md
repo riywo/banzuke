@@ -38,10 +38,13 @@ Claude Code can install it as a plugin instead:
 /plugin install banzuke@banzuke
 ```
 
+**claude.ai:** download
+[`banzuke.zip`](https://github.com/riywo/banzuke/releases/latest/download/banzuke.zip)
+and upload it under Settings → Capabilities → Skills. That zip is rebuilt from `main` on
+every push, so the link always points at the current skill.
+
 **Anything else:** the skill is just the [`skills/banzuke/`](skills/banzuke) directory — copy it
 wherever your agent looks for skills. [agentskills.io/clients](https://agentskills.io/clients)
-lists the agents that support Agent Skills and links to each one's setup docs. For claude.ai,
-zip that directory (with `banzuke/` as the top-level folder) and upload it under
-Settings → Capabilities → Skills.
+lists the agents that support Agent Skills and links to each one's setup docs.
 
 > Needs node (>=20.11) wherever it runs. If it is missing, the agent will walk you through it.
