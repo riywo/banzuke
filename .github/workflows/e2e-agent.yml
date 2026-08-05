@@ -14,7 +14,7 @@ on:
     inputs:
       model:
         description: Model the agent runs on ('auto' lets Copilot pick)
-        default: auto
+        default: claude-haiku-4.5
       copilot_version:
         description: npm dist-tag or version of @github/copilot
         default: latest
@@ -105,8 +105,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Pinned rather than `auto`: auto routed the first run to gpt-5-mini, which built a
+          # correct sheet but never opened the PNG — it stopped at "it ran", which is the one
+          # thing SKILL.md tells it not to do. Pinning also keeps the verdict comparable between
+          # runs, since auto re-routes per session.
           copilot -p "$(cat prompt.txt)" \
-            --model "${{ inputs.model || 'auto' }}" \
+            --model "${{ inputs.model || 'claude-haiku-4.5' }}" \
             --output-format json \
             --yolo \
             --no-ask-user \
