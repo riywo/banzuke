@@ -177,10 +177,17 @@ assert.ok(
   "the agent never invoked the banzuke skill — the SKILL.md description did not trigger",
 );
 
-// An argument that *is* a path to the PNG, rather than any mention of one: this is the agent
-// opening the image, not a shell line that happens to name it.
+// Only a *path-shaped* argument counts. Matching any string argument that ends in ".png" is not
+// enough: the bash tool takes a free-text `description`, and one run passed this check on
+// "…install deps and font, render banzuke.png" while never opening the image at all. Restricting
+// to path-named keys excludes prose (`description`) and shell lines (`command`) by construction.
+const pathArgs = (c) =>
+  Object.entries(c.arguments ?? {})
+    .filter(([k]) => /^(path|file_?path|file|filename)$/i.test(k))
+    .map(([, v]) => v)
+    .filter((v) => typeof v === "string");
 assert.ok(
-  calls.some((c) => argsOf(c).some((v) => v.trimEnd().endsWith(".png"))),
+  calls.some((c) => pathArgs(c).some((v) => v.trimEnd().endsWith(".png"))),
   "the agent never opened the PNG — the eyeball step in SKILL.md was skipped",
 );
 
