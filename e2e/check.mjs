@@ -145,6 +145,28 @@ const calls = events.filter((e) => e.type === "tool.execution_start").map((e) =>
 assert.ok(calls.length > 0, `the transcript (${events.length} events) records no tool executions`);
 const argsOf = (c) => Object.values(c.arguments ?? {}).filter((v) => typeof v === "string");
 
+// Report what the session was before asserting anything about it. A failure below is about the
+// agent's behaviour, and the first question is always "which model, and what did it do?" — that
+// has to be on stdout already, because an assertion throws before any later note can print.
+// SKILL.md offers bun and deno alongside node, so do not count only one of them.
+const renders = calls.filter((c) =>
+  argsOf(c).some((v) => /\b(node|bun|deno)\s+\S*banzuke[\w-]*\.mjs/.test(v)),
+).length;
+note(`transcript: ${events.length} events, ${calls.length} tool calls, ${renders} renders`);
+note(`tools: ${calls.map((c) => c.toolName).join(" → ")}`);
+
+const result = events.findLast((e) => e.type === "result") ?? {};
+// `auto` picks per session, so record which model this verdict actually describes.
+const model = firstData("session.auto_mode_resolved").chosenModel ?? calls[0]?.model ?? "unknown";
+const { premiumRequests, sessionDurationMs } = result.usage ?? {};
+note(
+  `session: ${model}, ${Math.round((sessionDurationMs ?? 0) / 1000)}s, ${premiumRequests ?? "?"} premium requests`,
+);
+
+if (result.exitCode !== undefined) {
+  assert.equal(result.exitCode, 0, `the agent session exited ${result.exitCode}`);
+}
+
 // Discoverability is only half of it — the description also has to actually fire.
 assert.ok(
   firstData("session.skills_loaded").skills?.some((s) => s.name === "banzuke"),
@@ -160,23 +182,6 @@ assert.ok(
 assert.ok(
   calls.some((c) => argsOf(c).some((v) => v.trimEnd().endsWith(".png"))),
   "the agent never opened the PNG — the eyeball step in SKILL.md was skipped",
-);
-
-// SKILL.md offers bun and deno alongside node, so do not count only one of them.
-const renders = calls.filter((c) =>
-  argsOf(c).some((v) => /\b(node|bun|deno)\s+\S*banzuke[\w-]*\.mjs/.test(v)),
-).length;
-note(`transcript: ${events.length} events, ${calls.length} tool calls, ${renders} renders`);
-
-const result = events.findLast((e) => e.type === "result") ?? {};
-if (result.exitCode !== undefined) {
-  assert.equal(result.exitCode, 0, `the agent session exited ${result.exitCode}`);
-}
-// `auto` picks per session, so record which model this verdict actually describes.
-const model = firstData("session.auto_mode_resolved").chosenModel ?? calls[0]?.model ?? "unknown";
-const { premiumRequests, sessionDurationMs } = result.usage ?? {};
-note(
-  `session: ${model}, ${Math.round((sessionDurationMs ?? 0) / 1000)}s, ${premiumRequests ?? "?"} premium requests`,
 );
 
 // ---------- report ----------
