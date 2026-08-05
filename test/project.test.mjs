@@ -1,23 +1,12 @@
 // e2e: a "user project" copied wholesale from template/ works self-contained.
-// Instead of npm ci, the repo's node_modules is symlinked in (the dependency set is identical).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { pngSize } from "../skills/banzuke/template/lib/index.mjs";
-
-const root = fileURLToPath(new URL("..", import.meta.url));
-const tmp = path.join(root, "test/.tmp");
-
-function scaffold(name) {
-  const dir = path.join(tmp, name);
-  rmSync(dir, { recursive: true, force: true });
-  cpSync(path.join(root, "skills/banzuke/template"), dir, { recursive: true });
-  symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"));
-  return dir;
-}
+import sampleData from "./fixtures/sample-data.mjs";
+import { root, scaffold } from "./helpers/scaffold.mjs";
 
 function runScript(script) {
   return execFileSync(process.execPath, [script], { encoding: "utf8" });
@@ -39,8 +28,7 @@ test("an untouched scaffold produces a PNG and HTML (with the dated edition labe
 });
 
 test("renders at real-world scale with the 75-title fixture", () => {
-  const dir = scaffold("proj-75");
-  cpSync(path.join(root, "test/fixtures/sample-data.mjs"), path.join(dir, "data.mjs"));
+  const dir = scaffold("proj-75", sampleData);
   runScript(path.join(dir, "banzuke.mjs"));
   const { width, height } = sizeOf(path.join(dir, "banzuke.png"));
   assert.equal(width, 2144);
@@ -67,9 +55,8 @@ test("variants: a copy with different colors stays independent of the original",
   );
 });
 
-/** A data.mjs source string for the given tiers. */
-const project = (tiers) =>
-  `export default ${JSON.stringify({ title: "Test", unit: "titles", tiers }, null, 2)};\n`;
+/** Scaffold data for the given tiers (scaffold() writes it out as data.mjs). */
+const project = (tiers) => ({ title: "Test", unit: "titles", tiers });
 
 const FEATURED = { name: "Top", layout: "featured", color: "#d62828", items: ["One", "Two"] };
 const RANKED = { name: "Ranked", layout: "ranked", color: "#1b50a8", items: ["R1", "R2", "R3"] };
@@ -89,10 +76,9 @@ function wallColumnCounts(html) {
 }
 
 test("wall: every item box is pinned to exactly one line", () => {
-  const dir = scaffold("proj-wall-oneline");
   const titles = Array.from({ length: 30 }, (_, i) => `Item ${i + 1}`);
   titles[3] = "A wall title far too long to ever fit inside one column";
-  writeFileSync(path.join(dir, "data.mjs"), project([FEATURED, RANKED, wall(titles)]));
+  const dir = scaffold("proj-wall-oneline", project([FEATURED, RANKED, wall(titles)]));
   runScript(path.join(dir, "banzuke.mjs"));
 
   // fitSpan squashes with scaleX, which leaves the span's *layout* width untouched, so a shrunk
@@ -111,9 +97,8 @@ test("wall: every item box is pinned to exactly one line", () => {
 });
 
 test("wall: the remainder is spread across columns, not dumped in the last one", () => {
-  const dir = scaffold("proj-wall-split");
   const titles = Array.from({ length: 30 }, (_, i) => `Item ${i + 1}`);
-  writeFileSync(path.join(dir, "data.mjs"), project([FEATURED, RANKED, wall(titles)]));
+  const dir = scaffold("proj-wall-split", project([FEATURED, RANKED, wall(titles)]));
   runScript(path.join(dir, "banzuke.mjs"));
 
   const counts = wallColumnCounts(readFileSync(path.join(dir, "banzuke.html"), "utf8"));
@@ -125,12 +110,9 @@ test("wall: the remainder is spread across columns, not dumped in the last one",
 });
 
 test("a featured tier with no ranked tier still gets its band", () => {
-  const dir = scaffold("proj-feat-only");
   const featured = { ...FEATURED, items: ["One", "Two", "Three"] };
-  writeFileSync(
-    path.join(dir, "data.mjs"),
-    project([featured, wall(["A", "B", "C", "D", "E", "F"])]),
-  );
+  const data = project([featured, wall(["A", "B", "C", "D", "E", "F"])]);
+  const dir = scaffold("proj-feat-only", data);
   runScript(path.join(dir, "banzuke.mjs"));
 
   // The band used to be sized off the (absent) ranked tiers, collapsing to 0px and dropping every
