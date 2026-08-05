@@ -8,8 +8,14 @@ description: Generate and update banzuke (tier-list ranking) PNG images. Use whe
 
 Turn banzuke data (a list of titles split into tiers) into a shareable PNG sheet.
 No browser needed and roughly 300ms per sheet, so run the loop — edit → render →
-look at the PNG → fine-tune — until it actually looks good. Do not stop at "it ran":
-eyeballing and polishing is half the job.
+look at the PNG → fine-tune — until it actually looks good.
+
+**A successful render is not a finished task.** The deliverable is a visual artifact, and
+the exit status tells you nothing about whether it looks right — a first sheet is routinely
+lopsided, half-empty, or mis-ranked while rendering perfectly. The task is done only once
+you have **opened `banzuke.png` as an image**, walked the checklist below against what you
+actually see, and fixed what it turned up. Reporting the sheet as done without having viewed
+it is a failed run, however clean the output looked.
 
 ## Model — the deliverable is a self-contained project the user keeps
 
@@ -54,8 +60,12 @@ Below, `$BANZUKE` = the directory containing this SKILL.md.
 
 2. **Edit the data**: `data.mjs` — the tier structure (count, names, colors, layout) and items (in rank order)
 3. **Run**: `node banzuke.mjs` → `banzuke.html` and `banzuke.png`
-4. **Eyeball it**: Read the PNG and walk the whole checklist below
-5. Fix and re-run. Visual fixes normally mean the "tuning knobs" block at the top of `banzuke.mjs`
+4. **Look at the sheet — mandatory, every time.** Open `banzuke.png` itself as an image (not
+   the HTML, not the console output) and walk the whole checklist below against what you see.
+   A run that never opens the PNG has skipped the half of this job that decides whether the
+   sheet is any good, so do not describe the result to the user until you have
+5. Fix and re-run. Visual fixes normally mean the "tuning knobs" block at the top of `banzuke.mjs`.
+   Expect at least one round of this: a first sheet that needs no correction is rare
 
 ## Building banzuke data from a list of hundreds (triage UI)
 
