@@ -47,4 +47,4 @@ every push, so the link always points at the current skill.
 wherever your agent looks for skills. [agentskills.io/clients](https://agentskills.io/clients)
 lists the agents that support Agent Skills and links to each one's setup docs.
 
-> Needs node (>=20.11) wherever it runs. If it is missing, the agent will walk you through it.
+> Needs node (>=22) wherever it runs. If it is missing, the agent will walk you through it.

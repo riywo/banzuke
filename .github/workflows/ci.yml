@@ -1,0 +1,68 @@
+name: ci
+
+# Every pull request, whatever it targets — plus main itself, so a commit
+# pushed straight to main is not the one commit nothing ever checked.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One run per ref. A new push to a PR supersedes the in-flight check; runs on
+# main are left alone so every published commit keeps its own result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 22 first: it is the floor `engines` promises, so the install and the
+      # cache are keyed to the oldest version anyone is allowed to run.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # The root install covers the samples workspace too, and it serves every
+      # version below: @takumi-rs ships N-API prebuilds named by os/arch, so
+      # nothing is rebuilt per major. `prepare` runs `lefthook install`, which
+      # is harmless here.
+      - run: npm ci
+
+      # Biome does not care which version node is, so it runs once.
+      - name: biome
+        run: npm run check:ci
+
+      # Each setup-node re-points PATH for the steps after it, which is all the
+      # switching needs. `!cancelled()` on every leg so one bad major — or a
+      # Biome failure — still reports the rest instead of hiding them.
+      - name: test (node 22)
+        if: '!cancelled()'
+        run: npm test
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: '!cancelled()'
+        with:
+          node-version: "24"
+          package-manager-cache: false # nothing to save: the 22 leg owns the cache
+
+      - name: test (node 24)
+        if: '!cancelled()'
+        run: npm test
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: '!cancelled()'
+        with:
+          node-version: "26"
+          package-manager-cache: false
+
+      - name: test (node 26)
+        if: '!cancelled()'
+        run: npm test
