@@ -1,0 +1,153 @@
+# End-to-end test of the skill itself: a real agent, given nothing but SKILL.md and a user-style
+# request, has to scaffold a project, pick a font, render, look at the PNG and hand it back.
+#
+# test/ covers the template; this covers the instructions.
+#
+# It runs on Copilot CLI, which authenticates in Actions with the built-in GITHUB_TOKEN — no
+# secret to provision, so a fork of this repo can run it as-is. Requests are metered as Copilot
+# AI credits against the repo owner; an organization has to allow "Copilot CLI billed to the
+# organization". Pull requests opened *from* a fork are skipped — see the job's `if:` below.
+name: e2e (agent + skill)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        # Must stay in step with the fallback on the `copilot -p` line below. A pinned model has
+        # to be one the account's live catalog actually offers — `claude-haiku-4.5` is not.
+        description: Model the agent runs on ('auto' lets Copilot pick)
+        default: auto
+      copilot_version:
+        description: npm dist-tag or version of @github/copilot
+        default: latest
+  schedule:
+    - cron: "23 5 * * 1" # Mondays, 05:23 UTC
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - "e2e/**"
+      - ".github/workflows/e2e-agent.yml"
+  # Duplicated rather than shared via a YAML anchor — the Actions workflow parser does not
+  # support anchors. Keep the two lists in step.
+  #
+  # `labeled` is in the list so that adding the e2e label to an open pull request starts a run.
+  # Without it the label would only take effect on the next push, which reads as the gate being
+  # broken. The `if:` below still decides whether any of these actually run.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "skills/**"
+      - "e2e/**"
+      - ".github/workflows/e2e-agent.yml"
+
+permissions:
+  contents: read
+  copilot-requests: write # lets the built-in GITHUB_TOKEN make Copilot requests
+
+concurrency:
+  group: e2e-agent-${{ github.ref }}
+  # A superseded pull-request commit is worth nothing, so cancel those. Never cancel main or the
+  # schedule: killing one of those mid-session throws away AI credits already spent, with no
+  # sheet and no transcript to show for it.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A pull request has to opt in with the `e2e` label — every run spends real AI credits, and
+    # most pull requests touching these paths do not need a full agent run to review.
+    #
+    # It must also never run code proposed from a fork: this hands an agent a shell and spends
+    # the repo owner's credits. Fork PRs get a read-only GITHUB_TOKEN that cannot hold
+    # copilot-requests:write anyway, so skipping them outright turns what would be a confusing
+    # mid-run permission failure into a clean skip.
+    # The last clause matters: `types: [labeled]` cannot be filtered to one label name, so it
+    # fires for *every* label added. Testing only for the label's presence would start a fresh
+    # paid run each time an unrelated label (size/…, needs-review, …) lands on a PR that already
+    # carries `e2e` — and cancel-in-progress would kill the run underway to do it.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'e2e') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'e2e'))
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        run: |
+          npm install -g "@github/copilot@${{ inputs.copilot_version || 'latest' }}"
+          copilot --version
+
+      - name: Stage a workspace holding nothing but the skill
+        run: |
+          # Outside the checkout on purpose — the agent must not be able to read this repo's
+          # tests, samples or git history. All it gets is the skill and the request.
+          # ($WORK has to be set here: the runner context is not available in job-level env.)
+          work="$RUNNER_TEMP/agent-e2e"
+          echo "WORK=$work" >> "$GITHUB_ENV"
+          mkdir -p "$work/.claude/skills"
+          cp -r skills/banzuke "$work/.claude/skills/banzuke"
+          node e2e/task.mjs > "$work/prompt.txt"
+
+      - name: Check the skill is discoverable
+        working-directory: ${{ env.WORK }}
+        run: |
+          # Purely local, needs no credentials, and costs nothing — so a broken skill layout
+          # (bad frontmatter, wrong directory depth) fails here rather than after a paid run.
+          copilot skill list --no-color | tee skills.txt
+          grep -qE '^[[:space:]]*banzuke\b' skills.txt || {
+            echo "::error::Copilot CLI did not discover the banzuke skill in .claude/skills/"
+            exit 1
+          }
+
+      - name: Run the agent
+        working-directory: ${{ env.WORK }}
+        shell: bash # for pipefail — otherwise `tee` masks a failed run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `auto` re-routes per session, so the verdict is not strictly comparable between runs
+          # — check.mjs records which model was chosen so a result can be read in context.
+          # Pinning would be better, but --model is validated against the account's live model
+          # catalog, which is narrower than the router's candidates: `claude-haiku-4.5` appears
+          # in the router's availableModels and is still rejected as "not available" here.
+          copilot -p "$(cat prompt.txt)" \
+            --model "${{ inputs.model || 'auto' }}" \
+            --output-format json \
+            --yolo \
+            --no-ask-user \
+            --no-color \
+            --disable-builtin-mcps \
+            | tee transcript.jsonl
+
+      - name: Check what the agent produced
+        id: check
+        run: node e2e/check.mjs "$WORK"
+
+      - name: Reproduce the project from its lockfile alone
+        run: |
+          rm -rf "$RUNNER_TEMP/repro"
+          cp -r "${{ steps.check.outputs.project }}" "$RUNNER_TEMP/repro"
+          cd "$RUNNER_TEMP/repro"
+          rm -rf node_modules ./*.png ./*.html
+          npm ci
+          node banzuke.mjs
+          test -s banzuke.png
+
+      - name: Upload the sheet and the transcript
+        if: always() && env.WORK != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-e2e-${{ github.run_id }}
+          path: |
+            ${{ env.WORK }}
+            !${{ env.WORK }}/**/node_modules/**
+            !${{ env.WORK }}/.claude/**
+          if-no-files-found: warn
+          retention-days: 14
