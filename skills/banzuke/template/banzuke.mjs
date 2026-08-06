@@ -385,6 +385,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The rendering half of the job is the easy half. This line is the reminder that the sheet has
   // not been checked yet, printed where whoever ran it is already looking — a note in the docs
   // loses to a tool result every time.
-  console.log("Not done yet → open banzuke.png as an image and check it: is it densely filled,");
-  console.log("are the margins aligned, does #1 read as the biggest thing? Fix, then re-run.");
+  console.log(
+    "Not done yet → open banzuke.png as an image and check it: is it densely filled,\n" +
+      "are the margins aligned, does #1 read as the biggest thing? Fix, then re-run.",
+  );
 }

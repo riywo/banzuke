@@ -13,8 +13,10 @@ on:
   workflow_dispatch:
     inputs:
       model:
+        # Must stay in step with the fallback on the `copilot -p` line below. A pinned model has
+        # to be one the account's live catalog actually offers — `claude-haiku-4.5` is not.
         description: Model the agent runs on ('auto' lets Copilot pick)
-        default: claude-haiku-4.5
+        default: auto
       copilot_version:
         description: npm dist-tag or version of @github/copilot
         default: latest
@@ -61,10 +63,15 @@ jobs:
     # the repo owner's credits. Fork PRs get a read-only GITHUB_TOKEN that cannot hold
     # copilot-requests:write anyway, so skipping them outright turns what would be a confusing
     # mid-run permission failure into a clean skip.
+    # The last clause matters: `types: [labeled]` cannot be filtered to one label name, so it
+    # fires for *every* label added. Testing only for the label's presence would start a fresh
+    # paid run each time an unrelated label (size/…, needs-review, …) lands on a PR that already
+    # carries `e2e` — and cancel-in-progress would kill the run underway to do it.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
-       contains(github.event.pull_request.labels.*.name, 'e2e'))
+       contains(github.event.pull_request.labels.*.name, 'e2e') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'e2e'))
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

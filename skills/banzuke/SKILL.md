@@ -60,10 +60,8 @@ Below, `$BANZUKE` = the directory containing this SKILL.md.
 
 2. **Edit the data**: `data.mjs` — the tier structure (count, names, colors, layout) and items (in rank order)
 3. **Run**: `node banzuke.mjs` → `banzuke.html` and `banzuke.png`
-4. **Look at the sheet — mandatory, every time.** Open `banzuke.png` itself as an image (not
-   the HTML, not the console output) and walk the whole checklist below against what you see.
-   A run that never opens the PNG has skipped the half of this job that decides whether the
-   sheet is any good, so do not describe the result to the user until you have
+4. **Look at the sheet — mandatory, every time.** Open `banzuke.png` itself as an image (not the
+   HTML, not the console output) and walk the whole checklist below against what you see
 5. Fix and re-run. Visual fixes normally mean the "tuning knobs" block at the top of `banzuke.mjs`.
    Expect at least one round of this: a first sheet that needs no correction is rare
 
@@ -97,8 +95,9 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
   (`FEAT_ROW_H` ↓ / adjust `TIER_WEIGHT`)
 - **The featured column is half empty** → **this is a data problem, and no knob fixes it.** The
   top band's height is set by the *ranked* tiers beside it, not by the featured tier, so the only
-  thing that fills the featured column is how many items are in it. On a typical sheet (three
-  ranked tiers alongside), 1 item fills ~27% of the column, 2 ~44%, 3 ~61%, 4 ~78%, 5 ~95% —
+  thing that fills the featured column is how many items are in it. Measured on the untouched
+  template (default knobs, three ranked tiers alongside), 1 item fills ~27% of the column, 2 ~44%,
+  3 ~61%, 4 ~78%, 5 ~95% — retuning the knobs moves those numbers, but not the shape of the rule,
   so **aim for 4–6 featured items**. Raising `FEAT_ROW_H` does not rescue a lone item: the row
   gets taller but `TYPE.featured.cap` holds the text at its size, so you get one tall, mostly
   empty box. Promote more titles into the tier, or drop `layout: "featured"` entirely and let #1

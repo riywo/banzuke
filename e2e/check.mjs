@@ -91,9 +91,13 @@ note(`png: ${width}×${height} px, ${Math.round(png.length / 1024)} KiB`);
 // named entities; the numeric forms are covered for anything a rewritten template might produce.
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 const decodeEntities = (s) =>
-  s.replace(/&(?:(amp|lt|gt|quot|apos)|#(\d+)|#[xX]([0-9a-fA-F]+));/g, (_, name, dec, hex) =>
-    name ? ENTITIES[name] : String.fromCodePoint(Number.parseInt(dec ?? hex, dec ? 10 : 16)),
-  );
+  s.replace(/&(?:(amp|lt|gt|quot|apos)|#(\d+)|#[xX]([0-9a-fA-F]+));/g, (whole, name, dec, hex) => {
+    if (name) return ENTITIES[name];
+    const code = Number.parseInt(dec ?? hex, dec ? 10 : 16);
+    // Out-of-range references would make fromCodePoint throw, and a RangeError here would
+    // masquerade as a broken checker rather than as whatever produced the bad entity.
+    return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
 
 const html = decodeEntities(readFileSync(path.join(project, "banzuke.html"), "utf8")).normalize(
   "NFC",
@@ -143,7 +147,13 @@ const firstData = (type) => events.find((e) => e.type === type)?.data ?? {};
 // never be found in any one of them.
 const calls = events.filter((e) => e.type === "tool.execution_start").map((e) => e.data ?? {});
 assert.ok(calls.length > 0, `the transcript (${events.length} events) records no tool executions`);
-const argsOf = (c) => Object.values(c.arguments ?? {}).filter((v) => typeof v === "string");
+// String arguments of a tool call, optionally only those under path-shaped keys.
+const argsOf = (c, keys) =>
+  Object.entries(c.arguments ?? {})
+    .filter(([k]) => !keys || keys.test(k))
+    .map(([, v]) => v)
+    .filter((v) => typeof v === "string");
+const PATH_KEYS = /^(path|file_?path|file|filename)$/i;
 
 // Report what the session was before asserting anything about it. A failure below is about the
 // agent's behaviour, and the first question is always "which model, and what did it do?" — that
@@ -177,17 +187,16 @@ assert.ok(
   "the agent never invoked the banzuke skill — the SKILL.md description did not trigger",
 );
 
-// Only a *path-shaped* argument counts. Matching any string argument that ends in ".png" is not
-// enough: the bash tool takes a free-text `description`, and one run passed this check on
-// "…install deps and font, render banzuke.png" while never opening the image at all. Restricting
-// to path-named keys excludes prose (`description`) and shell lines (`command`) by construction.
-const pathArgs = (c) =>
-  Object.entries(c.arguments ?? {})
-    .filter(([k]) => /^(path|file_?path|file|filename)$/i.test(k))
-    .map(([, v]) => v)
-    .filter((v) => typeof v === "string");
+// Only a *path-shaped* argument pointing at a rendered sheet counts. Matching any string argument
+// ending in ".png" was not enough: the bash tool takes a free-text `description`, and one run
+// passed this check on "…install deps and font, render banzuke.png" while never opening the image
+// at all. Path-named keys exclude prose (`description`) and shell lines (`command`), and the
+// basename pattern keeps some unrelated .png in the workspace from standing in for the sheet
+// (variants are named banzuke-dark.png and the like, so match the family rather than one name).
 assert.ok(
-  calls.some((c) => pathArgs(c).some((v) => v.trimEnd().endsWith(".png"))),
+  calls.some((c) =>
+    argsOf(c, PATH_KEYS).some((v) => /(^|\/)banzuke[\w-]*\.png$/.test(v.trimEnd())),
+  ),
   "the agent never opened the PNG — the eyeball step in SKILL.md was skipped",
 );
 
