@@ -37,7 +37,7 @@ my-banzuke/
 
 ## Requirements
 
-- Runtime: node >=20.11 (the same files also run under bun / deno)
+- Runtime: node >=22 (the same files also run under bun / deno)
 - **Do not install node on your own if it is missing** — talk to the user about it first
   (macOS: `brew install node`, otherwise https://nodejs.org). Given node, there is nothing else
 - The skill itself needs **no** setup. Dependencies land per project via `npm ci`

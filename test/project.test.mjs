@@ -139,4 +139,7 @@ test("template ships with its lock and package.json", () => {
   assert.equal(lock.lockfileVersion, 3);
   // via takumi-js, even the native binary (@takumi-rs/core) is pinned in the lock
   assert.ok(Object.keys(lock.packages).some((k) => k.includes("@takumi-rs/core")));
+  // npm mirrors engines into the lock's own entry, so raising the floor in the
+  // manifest alone leaves the scaffold stating two different versions.
+  assert.equal(lock.packages[""].engines.node, pkg.engines.node);
 });

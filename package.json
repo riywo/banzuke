@@ -6,14 +6,16 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "test": "node --test",
+    "smoke": "node scripts/smoke.mjs",
     "samples": "node samples/build/all.mjs",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "check": "biome check --write .",
+    "check:ci": "biome ci .",
     "prepare": "lefthook install"
   },
   "workspaces": [
