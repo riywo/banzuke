@@ -45,8 +45,9 @@ jobs:
       # Biome failure — still reports the rest instead of hiding them.
       # `npm test` covers the template's code against this repo's node_modules;
       # `npm run smoke` copies template/ out and installs its own lockfile, which
-      # is the promise SKILL.md makes to users and the only place it is run. Both
-      # go on every major, since either can break on a version the other survives.
+      # is the promise SKILL.md makes to users. Both go on every major, since
+      # either can break on a version the other survives. The same smoke runs
+      # against bun and deno in the `runtimes` job below.
       - name: test (node 22)
         if: '!cancelled()'
         run: npm test
@@ -82,3 +83,48 @@ jobs:
       - name: smoke (node 26)
         if: '!cancelled()'
         run: npm run smoke
+
+  # SKILL.md tells the agent to scaffold with whichever of node / bun / deno the user has, and
+  # template/ ships a lockfile per runtime to back that up. Nothing but running them proves it:
+  # the runtimes disagree about lockfiles (deno ignores package-lock.json outright), about bare
+  # specifiers (deno rejects undeclared transitive deps) and about permissions (deno needs them
+  # spelled out). A separate job so a bun/deno regression is legible at a glance, and so the
+  # node matrix above is not held up by two extra toolchain installs.
+  runtimes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # node is still needed here: it drives both scripts, which only shell out to the runtime
+      # under test. 22 to match the floor the `check` job installs.
+      #
+      # No `npm ci` and no npm cache: neither script imports anything outside node's builtins and
+      # the template's leaf modules, so this job needs no node_modules at all. (Restoring one
+      # would mean ~90 MB of Biome, types and sample fonts that nothing here runs.)
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.x
+
+      # First, because a drifted lock is the failure that explains the other two: it regenerates
+      # all three from template/package.json and diffs them against what is committed.
+      - name: locks in sync
+        run: npm run locks:check
+
+      # Each leg prunes template/ to that runtime's files, installs frozen from its own lock,
+      # adds the font and renders — the scaffold recipe from SKILL.md, start to finish.
+      - name: smoke (bun)
+        if: '!cancelled()'
+        run: npm run smoke:bun
+
+      - name: smoke (deno)
+        if: '!cancelled()'
+        run: npm run smoke:deno

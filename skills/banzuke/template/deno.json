@@ -1,0 +1,12 @@
+{
+  "//": [
+    "Deno-only. The dependencies live in package.json (deno reads it); this file carries the run",
+    "task, whose permissions are what the renderer actually needs: read (fonts, node_modules),",
+    "write (banzuke.png / banzuke.html), env + sys (takumi's platform probe), ffi (its native",
+    "binary), net (twemoji, only when the sheet has emoji in it).",
+    "On node or bun this file does nothing — delete it along with deno.lock."
+  ],
+  "tasks": {
+    "render": "deno run --allow-read --allow-write --allow-env --allow-sys --allow-ffi --allow-net banzuke.mjs"
+  }
+}

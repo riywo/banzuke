@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { RUNTIMES, runtimeFiles, template } from "../scripts/runtimes.mjs";
 import templateData from "../skills/banzuke/template/data.mjs";
 import { TITLES } from "./task.mjs";
 
@@ -51,21 +52,37 @@ note(`project: ${path.relative(work, project) || "."}`);
 // ---------- the project is complete and self-contained ----------
 
 // banzuke.png is not in this list: `rendered` above already selected on it.
-for (const f of [
-  "package.json",
-  "package-lock.json",
-  "data.mjs",
-  "banzuke.mjs",
-  "lib/index.mjs",
-  "banzuke.html",
-]) {
+for (const f of ["package.json", "data.mjs", "banzuke.mjs", "lib/index.mjs", "banzuke.html"]) {
   assert.ok(existsSync(path.join(project, f)), `missing from the project: ${f}`);
 }
 
+// Which runtime the agent scaffolded for, read off the runtime-specific files it kept. SKILL.md
+// has it delete the other two runtimes' files, so exactly one runtime's set survives — anything
+// else means the prune was skipped or half-done, and the leftovers go stale the moment a font
+// is added (a stale package-lock.json then makes a later `npm ci` fail outright).
+const kept = runtimeFiles.filter((f) => existsSync(path.join(project, f)));
+const scaffolded = Object.entries(RUNTIMES).filter(([, r]) => kept.includes(r.lock));
+assert.equal(
+  scaffolded.length,
+  1,
+  `expected one runtime's files, found: ${kept.join(", ") || "no lockfile at all"}`,
+);
+const [runtime, { files }] = scaffolded[0];
+assert.deepEqual(
+  kept.filter((f) => !files.includes(f)),
+  [],
+  `${runtime} project, but another runtime's files were left behind: ${kept.join(", ")}`,
+);
+note(`runtime: ${runtime} (${kept.join(", ")})`);
+
 const pkg = JSON.parse(readFileSync(path.join(project, "package.json"), "utf8"));
 assert.ok(pkg.dependencies?.["takumi-js"], "package.json does not depend on takumi-js");
-// The skill ships no font, so a working project must have installed one of its own.
-const fonts = Object.keys(pkg.dependencies).filter((d) => d !== "takumi-js");
+// The skill ships no font, so a working project must have installed one of its own. What counts
+// as "not a font" is whatever the template already shipped — read rather than re-listed here, so
+// that adding a dependency to the template cannot silently weaken this into a check that passes
+// on a tofu sheet.
+const shipped = JSON.parse(readFileSync(path.join(template, "package.json"), "utf8")).dependencies;
+const fonts = Object.keys(pkg.dependencies).filter((d) => !shipped[d]);
 assert.ok(fonts.length > 0, "no font package installed — the sheet would render as tofu");
 note(`fonts: ${fonts.join(", ")}`);
 
@@ -203,7 +220,7 @@ assert.ok(
 // ---------- report ----------
 
 if (process.env.GITHUB_OUTPUT) {
-  appendFileSync(process.env.GITHUB_OUTPUT, `project=${project}\n`);
+  appendFileSync(process.env.GITHUB_OUTPUT, `project=${project}\nruntime=${runtime}\n`);
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(

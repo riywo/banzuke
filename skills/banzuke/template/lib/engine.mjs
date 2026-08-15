@@ -24,7 +24,9 @@ async function createRenderer() {
     renderer = new core.Renderer();
   } catch (nativeError) {
     // wasm fallback for platforms without a napi binary (self-initializing entry).
-    // @takumi-rs/wasm always ships as a dependency of takumi-js.
+    // takumi-js depends on @takumi-rs/wasm, but package.json names it too, and must keep doing
+    // so: deno refuses to import a bare specifier the project does not itself declare, which
+    // left this fallback unreachable there.
     try {
       const wasm = await import("@takumi-rs/wasm/node");
       wasm.setGlyphCacheMaxBytes?.(GLYPH_CACHE_BYTES);
@@ -55,6 +57,17 @@ export async function registerFont(font) {
 }
 
 /**
+ * The command that adds an npm package under whichever runtime is running this project.
+ * Handing a bun user `npm i` is not just noise: it would install against the wrong lockfile
+ * and leave the project with two disagreeing dependency sets.
+ */
+function addPackageCommand(pkg) {
+  if (globalThis.Deno) return `deno add npm:${pkg}`;
+  if (globalThis.process?.versions?.bun) return `bun add ${pkg}`;
+  return `npm i ${pkg}`;
+}
+
+/**
  * Register a font file from an installed npm package, e.g.
  * `registerFontPackage(FONT_FAMILY, "@fontsource-variable/archivo/files/archivo-latin-wght-normal.woff2")`.
  *
@@ -72,7 +85,7 @@ export async function registerFontPackage(name, specifier) {
       .split("/")
       .slice(0, specifier.startsWith("@") ? 2 : 1)
       .join("/");
-    throw new Error(`Font not installed: ${specifier}\n  run: npm i ${pkg}`);
+    throw new Error(`Font not installed: ${specifier}\n  run: ${addPackageCommand(pkg)}`);
   }
   return registerFont({ name, data: await readFile(file) });
 }

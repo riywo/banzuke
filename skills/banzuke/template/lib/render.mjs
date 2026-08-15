@@ -4,6 +4,7 @@ import { render } from "takumi-js";
 import { fromHtml } from "takumi-js/helpers/html";
 import { DEFAULT_LANG, getRenderer } from "./engine.mjs";
 import { decodeTextEntities } from "./entities.mjs";
+import { pngSize } from "./png.mjs";
 
 /**
  * Turn an HTML string into a PNG (Uint8Array).
@@ -26,12 +27,6 @@ export async function renderPng(
   if (width !== undefined) options.width = Math.round(width * devicePixelRatio);
   if (stylesheets.length > 0) options.stylesheets = stylesheets;
   return render(node, options);
-}
-
-/** Read the dimensions out of PNG bytes (IHDR). */
-export function pngSize(png) {
-  const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  return { width: dv.getUint32(16), height: dv.getUint32(20) };
 }
 
 /**

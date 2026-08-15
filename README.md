@@ -47,4 +47,6 @@ every push, so the link always points at the current skill.
 wherever your agent looks for skills. [agentskills.io/clients](https://agentskills.io/clients)
 lists the agents that support Agent Skills and links to each one's setup docs.
 
-> Needs node (>=22) wherever it runs. If it is missing, the agent will walk you through it.
+> Needs node (>=22), bun (>=1.2) or deno (>=2) wherever it runs — the scaffold ships a lockfile
+> for each, and CI renders a sheet on all three. If none is installed, the agent will walk you
+> through it.

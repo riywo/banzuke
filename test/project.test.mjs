@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { commandLine, RUNTIMES, runtimeFiles } from "../scripts/runtimes.mjs";
 import { pngSize } from "../skills/banzuke/template/lib/index.mjs";
 import sampleData from "./fixtures/sample-data.mjs";
 import { root, scaffold } from "./helpers/scaffold.mjs";
@@ -126,20 +127,69 @@ test("a featured tier with no ranked tier still gets its band", () => {
   assert.ok(sizeOf(path.join(dir, "banzuke.png")).height > 700);
 });
 
+const templateFile = (file) =>
+  readFileSync(path.join(root, "skills/banzuke/template", file), "utf8");
+
 test("template ships with its lock and package.json", () => {
-  const pkg = JSON.parse(
-    readFileSync(path.join(root, "skills/banzuke/template/package.json"), "utf8"),
-  );
+  const pkg = JSON.parse(templateFile("package.json"));
   assert.ok(pkg.dependencies["takumi-js"]);
-  // No font ships with the template — the project installs the one it wants.
-  assert.deepEqual(Object.keys(pkg.dependencies), ["takumi-js"]);
-  const lock = JSON.parse(
-    readFileSync(path.join(root, "skills/banzuke/template/package-lock.json"), "utf8"),
-  );
+  // No font ships with the template — the project installs the one it wants. @takumi-rs/wasm is
+  // takumi's own fallback renderer, declared explicitly because deno refuses to import a bare
+  // specifier the project does not depend on (which left the fallback in lib/engine.mjs dead).
+  assert.deepEqual(Object.keys(pkg.dependencies).sort(), ["@takumi-rs/wasm", "takumi-js"]);
+  const lock = JSON.parse(templateFile("package-lock.json"));
   assert.equal(lock.lockfileVersion, 3);
   // via takumi-js, even the native binary (@takumi-rs/core) is pinned in the lock
   assert.ok(Object.keys(lock.packages).some((k) => k.includes("@takumi-rs/core")));
   // npm mirrors engines into the lock's own entry, so raising the floor in the
   // manifest alone leaves the scaffold stating two different versions.
   assert.equal(lock.packages[""].engines.node, pkg.engines.node);
+});
+
+test("the bun and deno locks pin the same takumi as the npm one", () => {
+  // One manifest, three locks: bun migrates package-lock.json only when bun.lock is absent, and
+  // deno ignores it entirely, so nothing but `npm run locks` keeps them in step. Substring rather
+  // than JSON.parse: bun.lock is JSONC (trailing commas), which JSON.parse rejects.
+  const version = JSON.parse(templateFile("package-lock.json")).packages["node_modules/takumi-js"]
+    .version;
+  for (const lock of ["bun.lock", "deno.lock"]) {
+    assert.ok(
+      templateFile(lock).includes(`takumi-js@${version}`),
+      `${lock} does not pin ${version}`,
+    );
+  }
+});
+
+test("docs match the runtime table", () => {
+  // SKILL.md is the product: an agent follows its table, never scripts/runtimes.mjs. The two
+  // cannot import each other (template/ is copied out of this repo, and the docs ship to users),
+  // so this is what keeps a command changed in one from rotting in the other.
+  const skill = readFileSync(path.join(root, "skills/banzuke/SKILL.md"), "utf8");
+  // Matched as the whole of a `backticked` span, not as a substring: plain `includes` would let
+  // `bun install --frozen` pass against a doc that says `bun install --frozen-lockfile`.
+  for (const [name, runtime] of Object.entries(RUNTIMES)) {
+    for (const command of [runtime.install, runtime.add("<pkg>"), runtime.run]) {
+      const line = commandLine(command);
+      assert.ok(skill.includes(`\`${line}\``), `SKILL.md never states \`${line}\` for ${name}`);
+    }
+  }
+  // Every runtime-owned file has to appear in some prune command, or a scaffolded project keeps
+  // a lockfile that nothing maintains.
+  for (const file of runtimeFiles) {
+    assert.match(
+      skill,
+      new RegExp(`rm[^\\n|]*${file.replaceAll(".", "\\.")}(?![\\w.])`),
+      `${file} is pruned nowhere`,
+    );
+  }
+});
+
+test("deno.json's render task carries the permissions the renderer needs", () => {
+  // A deno user runs `deno task render`, so this task line is the deno equivalent of
+  // `node banzuke.mjs` — a missing flag here fails the render, not the install.
+  const { tasks } = JSON.parse(templateFile("deno.json"));
+  assert.match(tasks.render, /\bbanzuke\.mjs$/);
+  for (const perm of ["read", "write", "env", "sys", "ffi", "net"]) {
+    assert.match(tasks.render, new RegExp(`--allow-${perm}\\b`), `--allow-${perm} missing`);
+  }
 });
