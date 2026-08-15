@@ -12,10 +12,13 @@
     in
     {
       devShells = forAllSystems (pkgs: {
-        # Node is all it takes (npm resolves takumi's native binary).
+        # Node runs everything; bun and deno are here because the template ships a lockfile for
+        # each of them, and `npm run locks` regenerates all three (the smoke tests need them too).
         default = pkgs.mkShell {
           packages = with pkgs; [
             nodejs_24
+            bun
+            deno
             git
           ];
         };

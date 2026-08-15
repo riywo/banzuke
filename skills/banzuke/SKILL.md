@@ -23,24 +23,26 @@ One scaffolded directory *is* the finished deliverable:
 
 ```
 my-banzuke/
-  package.json / package-lock.json   dependencies (takumi + the font you pick), pinned by the lock
+  package.json + one lockfile        dependencies (takumi + the font you pick), pinned by the lock
   data.mjs                           banzuke data (edit this)
   banzuke.mjs                        sheet design + entry point (edit this)
   lib/                               rendering engine (bundled copy; modify it if you need to)
   banzuke.html / banzuke.png         output
 ```
 
-- The user stores it however they like: git / zip / just a folder / Google Drive. Anywhere
-  with node, `npm ci && node banzuke.mjs` reproduces it
+- The user stores it however they like: git / zip / just a folder / Google Drive. Anywhere with
+  the runtime it was scaffolded for, a frozen install plus one command reproduces it
 - To update it, edit data.mjs or the code and run it again
 - Updating this skill does not affect existing projects (everything is bundled)
 
 ## Requirements
 
-- Runtime: node >=22 (the same files also run under bun / deno)
-- **Do not install node on your own if it is missing** — talk to the user about it first
-  (macOS: `brew install node`, otherwise https://nodejs.org). Given node, there is nothing else
-- The skill itself needs **no** setup. Dependencies land per project via `npm ci`
+- One of **node >=22**, **bun >=1.2** or **deno >=2**. None is privileged: the template ships a
+  lockfile for each, and CI renders a real sheet on all three. Probe `node -v`, then `bun -v`,
+  then `deno -V`, and scaffold for the first one the user already has
+- **Do not install a runtime on your own if none of them is there** — talk to the user about it
+  first (macOS: `brew install node`, otherwise https://nodejs.org). Given one, nothing else is needed
+- The skill itself needs **no** setup. Dependencies land per project on the first install
   (network: registry.npmjs.org only, pinned by the lock)
 
 ## Basic workflow
@@ -51,15 +53,31 @@ Below, `$BANZUKE` = the directory containing this SKILL.md.
 
    ```bash
    cp -r "$BANZUKE/template" my-banzuke
-   cd my-banzuke && npm install
-   npm i @fontsource-variable/archivo   # no font is bundled — see Fonts below
+   cd my-banzuke
    ```
 
-   The template names Archivo in its Typeface block as a sane Latin default. Swap it for
-   something that fits the design and covers the data's script before you get attached.
+   The template carries a lockfile for all three runtimes. Use the row for the one you probed,
+   starting with its **prune** — the runtimes do not maintain each other's lockfiles, so the ones
+   you leave behind go stale the moment the font lands in `package.json`, and a stale
+   `package-lock.json` makes a later `npm ci` fail outright:
+
+   | runtime | prune | install | add a package | render |
+   |---|---|---|---|---|
+   | node | `rm bun.lock deno.lock deno.json` | `npm ci` | `npm i <pkg>` | `node banzuke.mjs` |
+   | bun | `rm package-lock.json deno.lock deno.json` | `bun install --frozen-lockfile` | `bun add <pkg>` | `bun banzuke.mjs` |
+   | deno | `rm package-lock.json bun.lock` | `deno install --frozen` | `deno add npm:<pkg>` | `deno task render` |
+
+   No font is bundled (see Fonts below). The package to add is the one the template's Typeface
+   block already names — `@fontsource-variable/archivo` — so on node the last two steps read
+   `npm ci` then `npm i @fontsource-variable/archivo`. Swap Archivo for something that fits the
+   design and covers the data's script before you get attached to it.
+
+   On deno, `deno task render` stands in for `node banzuke.mjs` everywhere below: the task in
+   `deno.json` carries the permission flags the renderer needs, and it forwards extra arguments
+   (`deno task render --draft`).
 
 2. **Edit the data**: `data.mjs` — the tier structure (count, names, colors, layout) and items (in rank order)
-3. **Run**: `node banzuke.mjs` → `banzuke.html` and `banzuke.png`
+3. **Run** the render command for the runtime → `banzuke.html` and `banzuke.png`
 4. **Look at the sheet — mandatory, every time.** Open `banzuke.png` itself as an image (not the
    HTML, not the console output) and walk the whole checklist below against what you see
 5. Fix and re-run. Visual fixes normally mean the "tuning knobs" block at the top of `banzuke.mjs`.
@@ -169,13 +187,13 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
 ### Code side (banzuke.mjs / lib)
 
 - **One change per run.** Change one knob, run, and compare against the previous PNG.
-  While fine-tuning you can loop with `node banzuke.mjs --draft` (dpr 1, ~3× faster), but
-  **always do the final check on a normal run** (dpr 2)
+  While fine-tuning you can loop with `--draft` (dpr 1, ~3× faster) appended to the render
+  command, but **always do the final check on a normal run** (dpr 2)
 - The main knobs are all in the block at the top: `T` (colors, font, weight) / `TYPE`
   (cap, rowFill, taper, stretch) / `FEAT_ROW_H`, `TIER_WEIGHT`, `MIN_RANK_UNIT`
   (height distribution) / `RANK_COLS` / `WALL` (sizes, em, stretch)
-- It is a plain node script, so console.log and the debugger work normally. When you suspect
-  the structure, read the generated `banzuke.html`
+- It is a plain script on every runtime, so console.log and the debugger work normally. When you
+  suspect the structure, read the generated `banzuke.html`
 - Rebuilding the layout from scratch is fine. Pre-compute the px yourself
   (never ask the renderer for calc). lib/ is part of the project too — modify it if needed
 
@@ -201,7 +219,8 @@ lightens glyphs when it stretches them), so a continuous 100–900 axis beats a 
 
 ### Installing and registering
 
-Install into the project, then name the file(s) in `FONT_FILES`:
+Install into the project with the add command for its runtime (`npm i` / `bun add` /
+`deno add npm:`), then name the file(s) in `FONT_FILES`:
 
 ```bash
 npm i @fontsource-variable/archivo      # or oswald / jetbrains-mono / bodoni-moda / …
@@ -215,12 +234,13 @@ const FONT_FILES = {
 };
 ```
 
-- **npm is the way to get fonts.** Fontsource (`@fontsource-variable/*`) covers most Latin
-  families; CJK faces are published too (e.g. `@fontpkg/source-han-sans-jp-vf`).
+- **The npm registry is the way to get fonts** (all three runtimes install from it). Fontsource
+  (`@fontsource-variable/*`) covers most Latin families; CJK faces are published too
+  (e.g. `@fontpkg/source-han-sans-jp-vf`).
   **Never download a font from the internet yourself** — if npm has nothing suitable, ask the
   user to supply the file and read it with `readFile` + `registerFont({ name, data })` instead
 - ttf / otf / ttc / woff / woff2 all work. `registerFontPackage(name, specifier)` resolves the
-  file out of the project and fails with the `npm i` command to run if it is not installed
+  file out of the project and, if it is not installed, fails with the add command to run
 - **A family you name in a style must be one you registered.** takumi does not complain about an
   unknown family — it silently falls back to another registered font, so the sheet still renders,
   just in the wrong face and with every measured width wrong
@@ -307,7 +327,8 @@ import {
 - `fit(text, opts)` → `{ scale, weight }` / `measureWidth(text, opts)` → natural width in px
 - `esc(s)` — HTML escape
 - `registerFontPackage(name, specifier)` / `registerFont({ name, data })` — the only way a glyph
-  gets drawn; nothing is bundled
+  gets drawn; nothing is bundled. A package that is not installed throws with the add command
+  for the runtime you are on
 - `FONT_FAMILY` — the family name the template registers its typeface under
 
 ## Troubleshooting
@@ -317,4 +338,10 @@ import {
   shows up there
 - **The run throws**: the stack points straight at the line in your own script. fitSpan throws
   an explicit error telling you to revisit the math when `avail` is <= 0
-- **Dependencies will not install**: run `npm ci` inside the project (check the lock got copied along)
+- **Dependencies will not install**: run the install command for the project's runtime
+  (`npm ci` / `bun install --frozen-lockfile` / `deno install --frozen`) inside the project, and
+  check its lockfile got copied along. "lock file out of sync" or a frozen-install failure
+  usually means a package was added with a different runtime's tool than the one the project
+  was scaffolded for
+- **deno: `NotCapable: Requires … access`**: the run is missing a permission. Use `deno task render`
+  rather than a bare `deno run` — the task in `deno.json` carries the full set

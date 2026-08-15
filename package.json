@@ -11,6 +11,10 @@
   "scripts": {
     "test": "node --test",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:bun": "node scripts/smoke.mjs --runtime bun",
+    "smoke:deno": "node scripts/smoke.mjs --runtime deno",
+    "locks": "node scripts/locks.mjs",
+    "locks:check": "node scripts/locks.mjs --check",
     "samples": "node samples/build/all.mjs",
     "format": "biome format --write .",
     "lint": "biome lint .",

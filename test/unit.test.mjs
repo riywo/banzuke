@@ -404,3 +404,27 @@ test("registerFontPackage: a missing package fails with the npm command that fix
     message: "Font not installed: nope-font\n  run: npm i nope-font",
   });
 });
+
+test("registerFontPackage: the fix it suggests is the running runtime's own", async () => {
+  // Handing a bun user `npm i` is not just noise — it installs against a lockfile that project
+  // does not use, and leaves it with two disagreeing dependency sets. These tests run on node,
+  // so the other two runtimes are reached by faking the one thing the engine detects each by.
+  const rejects = (expected) =>
+    assert.rejects(() => registerFontPackage("X", "@nope/font/files/x.woff2"), {
+      message: `Font not installed: @nope/font/files/x.woff2\n  run: ${expected}`,
+    });
+
+  globalThis.Deno = {};
+  try {
+    await rejects("deno add npm:@nope/font");
+  } finally {
+    delete globalThis.Deno;
+  }
+
+  process.versions.bun = "1.2.0";
+  try {
+    await rejects("bun add @nope/font");
+  } finally {
+    delete process.versions.bun;
+  }
+});

@@ -1,4 +1,5 @@
-// The banzuke sheet template = a runnable script (`node banzuke.mjs` → banzuke.html / banzuke.png).
+// The banzuke sheet template = a runnable script (`node banzuke.mjs`, `bun banzuke.mjs` or
+// `deno task render` → banzuke.html / banzuke.png).
 // The whole file is meant to be edited. When something looks off, start by changing one of
 // the "tuning knobs" constants below — one at a time — and re-running. Rebuilding the layout
 // structure from scratch is fine too.
@@ -21,9 +22,9 @@ import {
 
 // ================= Typeface =================
 // No font ships with the skill — this project installs its own, so the choice can suit both the
-// design and the data. To swap it: `npm i <font package>` here, then change FONT_FILES.
+// design and the data. To swap it: install the font package here, then change FONT_FILES.
 //
-//   npm i @fontsource-variable/archivo
+//   npm i @fontsource-variable/archivo        (bun add … / deno add npm:… on those runtimes)
 //
 // Every script in data.mjs needs a font that covers it, or those glyphs render as tofu (□).
 // Fonts split by unicode subset (Fontsource ships one file per subset) go in as separate family
@@ -371,7 +372,7 @@ export async function sheet() {
 </div>`;
 }
 
-// ---- Entry point: this runs on `node banzuke.mjs` (keeping both the html and the png) ----
+// ---- Entry point: this runs on `node banzuke.mjs` / `bun banzuke.mjs` / `deno task render` ----
 // It does not run when imported (i.e. when a variant script or your own driver calls sheet()).
 // --draft renders a dpr 1 draft (~3× faster). For the fine-tuning loop only — always finish
 // with a normal run.

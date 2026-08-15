@@ -130,8 +130,13 @@ jobs:
         id: check
         run: node e2e/check.mjs "$WORK"
 
+      # Only node is installed on this runner, so that is what the agent has to have scaffolded
+      # for — the check step reads the runtime off the surviving lockfile, and anything else here
+      # means it invented a setup it could not itself have run.
       - name: Reproduce the project from its lockfile alone
         run: |
+          test "${{ steps.check.outputs.runtime }}" = node \
+            || { echo "scaffolded for ${{ steps.check.outputs.runtime }}, but only node is installed here"; exit 1; }
           rm -rf "$RUNNER_TEMP/repro"
           cp -r "${{ steps.check.outputs.project }}" "$RUNNER_TEMP/repro"
           cd "$RUNNER_TEMP/repro"
