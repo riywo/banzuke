@@ -1220,3 +1220,74 @@ test("band grid: `cols: 0` on a tier beside another does not silently drop its i
   const html = await sheet();
   for (const item of ["z1", "z6", "o1", "o6"]) assert.ok(html.includes(`>${item}<`), item);
 });
+
+// ---- --report: scoring a layout instead of rendering it ----
+
+test("--report: measures coverage, the type ladder, slack and squeeze", async () => {
+  const { report } = await templateFor("grid-report", GRID);
+  const r = await report();
+  assert.ok(r.coverage > 0 && r.coverage < 1, `coverage out of range: ${r.coverage}`);
+  assert.ok(r.ladder.length >= 3, "one rung per tier that draws text");
+  for (const rung of r.ladder) {
+    assert.equal(typeof rung.name, "string");
+    assert.ok(rung.from >= rung.to, `${rung.name} should taper, got ${rung.from}→${rung.to}`);
+  }
+  assert.ok(Array.isArray(r.slack), "per-cell slack");
+  assert.ok(Number.isInteger(r.squeeze), "count of titles at scaleX < 1");
+});
+
+test("--report: coverage rises when the same data is set larger", async () => {
+  const { report } = await templateFor("grid-report-a", SPARSE);
+  const sparse = await report();
+  const { report: report2 } = await templateFor("grid-report-b", DENSE);
+  const dense = await report2();
+  assert.ok(
+    dense.coverage > sparse.coverage,
+    `a packed sheet should score denser: ${dense.coverage} vs ${sparse.coverage}`,
+  );
+});
+
+// A cell can be full by height and still mostly bare paper by type: a small tier sharing a row with
+// a much bigger one is handed that bigger tier's row height, but its own type still caps out at the
+// featured tier's last row. `slack` (got vs a cell's own MIN_RANK_UNIT-floor need) does not catch
+// this — a ranked cell always stretches to fill its row, so slack reads large for practically every
+// ranked cell, starved or not. `fill` (drawn line box over row box) is the number that isolates it,
+// and the free remedy — pinning `cols:` on the starved tier alone — must move that number without
+// moving the canvas the row's actual driver (the big neighbour) already paid for.
+const STARVED = (pinSmall) => ({
+  title: "T",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 26), color: "#d62828" },
+    {
+      name: "Small",
+      layout: "ranked",
+      items: bulk("s", 12),
+      row: 1,
+      column: 1,
+      ...(pinSmall ? { cols: 1 } : {}),
+    },
+    { name: "Big", layout: "ranked", items: bulk("g", 40), row: 1, column: 2 },
+  ],
+});
+
+test("--report: a cell starved by a bigger neighbor reads low in fill (not slack), and pinning cols: on it raises the fill without moving the canvas", async () => {
+  const STARVED_FILL = 0.3; // mirrors the template's own knob, next to report()
+  const { report: reportBefore } = await templateFor("report-starved-before", STARVED(false));
+  const before = await reportBefore();
+  const smallBefore = before.slack.find((c) => c.name === "Small");
+  assert.ok(smallBefore, "expected a Small cell in the report");
+  assert.ok(
+    smallBefore.fill < STARVED_FILL,
+    `expected Small to read as starved, got fill ${smallBefore.fill}`,
+  );
+
+  const { report: reportAfter } = await templateFor("report-starved-after", STARVED(true));
+  const after = await reportAfter();
+  const smallAfter = after.slack.find((c) => c.name === "Small");
+  assert.ok(
+    smallAfter.fill > smallBefore.fill,
+    `pinning cols: on the starved tier should raise its fill (${smallBefore.fill} -> ${smallAfter.fill})`,
+  );
+  assert.deepEqual(before.canvas, after.canvas, "the pin must not move the canvas");
+});

@@ -659,6 +659,150 @@ export function geometry(source = data) {
   return { ...over, cropRisk: over.sheetW / over.sheetH < SAFE_ASPECT };
 }
 
+// ---- Scoring a layout ----
+// geometry() says what fits; it does not say whether the fit is any good. Three implementers on
+// this branch each eyeballed a render and called it "unchanged" or "fine" and were wrong — a 13px
+// row-height swing, a 1px type change, a sheet gone croppable. report() puts a number on the things
+// the eye is bad at: how much of the canvas is ink, whether the rank still reads by size, and which
+// cells are spending their box on air instead of type. Compare two candidate data.mjs edits by
+// this, not by squinting at two PNGs.
+
+const SPAN =
+  /<span style="[^"]*?font-size:([\d.]+)px;font-weight:(\d+);font-family:'([^']+)';letter-spacing:([-\d.]+)px;transform:scaleX\(([\d.]+)\);">([^<]*)<\/span>/g;
+
+/** The featured column's own ramp, needed by both the ladder and the per-cell cap below it. */
+const featuredRamp = (g) => (g.featured ? tierSizes("featured", g.featRowH, g.featRows) : null);
+
+/**
+ * Walks the band the way groupColumns() draws it — per row, per cell, per tier in its stack —
+ * recomputing only the same rowH/unit/height arithmetic and feeding it to the same tierSizes() call
+ * rankedTier() makes. The ladder and the slack/fill report both read off this once, so neither can
+ * independently drift from what sheet() actually draws (see task-3-report.md for what that drift
+ * cost before the per-cell cap existed).
+ */
+function bandCells(g) {
+  const featLast = featuredRamp(g)?.at(-1) ?? Number.POSITIVE_INFINITY;
+  return g.bandRowPlan.flatMap((row, ri) => {
+    const lastRow = ri === g.bandRowPlan.length - 1;
+    const rowH = g.bandRowHeights[ri] - (lastRow ? 0 : DIV);
+    return row.cells.map((cell) => {
+      if (cell.walls) {
+        // A wall types itself off its own `size:`, flat top to bottom, and never stretches to fill
+        // the row — so it has a ladder rung but no meaningful fill (see slackOf below).
+        const tiers = cell.stack.map((tier, j) => ({
+          tier,
+          from: cell.walls[j].size,
+          to: cell.walls[j].size,
+          fill: null,
+        }));
+        return { cell, got: rowH, tiers };
+      }
+      const unit = (rowH - cell.fixed) / cell.weighted;
+      const tiers = cell.stack.map((tier, j) => {
+        const height = HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit);
+        const rowBoxH = (height - HDR_H) / cell.rows[j];
+        const sizes = tierSizes("ranked", rowBoxH, tier.items.length, featLast);
+        // The line box a row's text actually draws, over the box the row is drawn in — see
+        // report()'s doc comment for why this, and not slack, is what finds a starved cell.
+        return { tier, from: sizes[0], to: sizes.at(-1), fill: (sizes[0] * LINE) / rowBoxH };
+      });
+      return { cell, got: rowH, tiers };
+    });
+  });
+}
+
+/** One rung per tier that draws text, top to bottom: featured, the band cells in draw order, then
+ *  the foot walls — the same order sheet() lays them out in. */
+function ladderOf(g) {
+  const feat = featuredRamp(g);
+  const ladder = feat ? [{ name: g.featured.name, from: feat[0], to: feat.at(-1) }] : [];
+  for (const { tiers } of bandCells(g)) {
+    for (const t of tiers) ladder.push({ name: t.tier.name, from: t.from, to: t.to });
+  }
+  for (const w of g.wallPlan) ladder.push({ name: w.tier.name, from: w.size, to: w.size });
+  return ladder;
+}
+
+/**
+ * Per band cell: `got` (the row's height) against `need` catches a cell shorter than its row — and
+ * only a wall cell can be. A wall's height is exactly its lines and nothing more (bandCells' `got`
+ * for it), so `need` is `cell.need`, its real content height, and a gap between the two is genuine
+ * blank paper below the wall. A ranked cell has no such fixed requirement: bandCells' own `unit`
+ * stretches it to fill the row exactly, whatever its rank has earned, so `need` is `got` and its
+ * slack is always 0 — the row is, by construction, never short of that cell.
+ *
+ * That is exactly why slack alone misses the more common failure: a ranked cell squeezed *tall* by
+ * a bigger neighbour in the same row is never short of its row, so slack cannot see it. `fill` — the
+ * drawn line box over the row box, from bandCells — is what catches it instead: a small tier handed
+ * a big neighbour's row height still types no larger than its cap allows, leaving most of that
+ * height as leading. In the swept family behind this task, 142 of 148 such cells sat under 0.3 fill.
+ * Pinning `cols:` on the starved tier is the free fix — it raises the tier's own row count, which
+ * shrinks its row box without touching the row height its neighbour set (so the split and the
+ * canvas do not move).
+ */
+function slackOf(g) {
+  return bandCells(g).map(({ cell, got, tiers }) => {
+    const need = cell.walls ? cell.need : got;
+    return {
+      name: cell.stack.map((t) => t.name).join(" + "),
+      need,
+      got,
+      slack: got - need,
+      fill: cell.walls ? null : Math.min(...tiers.map((t) => t.fill)),
+    };
+  });
+}
+
+// A cell's type filling less than this share of its row's line box reads as bare paper rather than
+// a deliberate small tier — see slackOf's doc comment for the measured split (0.775 vs 0.144–0.288).
+const STARVED_FILL = 0.3;
+
+/**
+ * Score a candidate layout. Ink coverage is the one number that answers "is this denser?" — the
+ * eye cannot judge it from a thumbnail, and it routinely disagrees with intuition: shrinking the
+ * tier that holds most of the characters lowers it, however much height it frees.
+ */
+export async function report() {
+  const g = geometry(data);
+  const html = await sheet();
+  let ink = 0;
+  let squeeze = 0;
+  for (const m of html.matchAll(SPAN)) {
+    const [, size, weight, family, ls, scale, text] = m;
+    if (!text.trim()) continue;
+    const w = await measureWidth(text, {
+      size: Number(size),
+      weight: Number(weight),
+      family,
+      letterSpacing: Number(ls),
+    });
+    ink += w * Number(scale) * Number(size);
+    if (Number(scale) < 1) squeeze += 1;
+  }
+  return {
+    canvas: [g.sheetW, g.sheetH],
+    ratio: g.sheetW / g.sheetH,
+    clamped: g.clamped,
+    cropRisk: g.cropRisk,
+    coverage: ink / (g.sheetW * g.sheetH),
+    ladder: ladderOf(g),
+    slack: slackOf(g),
+    squeeze,
+  };
+}
+
+/** `name from→to`, chained by ` > ` — marked `!>` where a rung types bigger than the one above it,
+ *  the inversion the hierarchy bound and the per-cell cap both exist to prevent. */
+function formatLadder(ladder) {
+  return ladder
+    .map((rung, i) => {
+      const prev = ladder[i - 1];
+      const joiner = i === 0 ? "" : prev.to < rung.from ? " !> " : " > ";
+      return `${joiner}${rung.name} ${rung.from}→${rung.to}`;
+    })
+    .join("");
+}
+
 // ---- The whole sheet ----
 
 export async function sheet() {
@@ -851,31 +995,57 @@ export async function sheet() {
 // It does not run when imported (i.e. when a variant script or your own driver calls sheet()).
 // --draft renders a dpr 1 draft (~3× faster). For the fine-tuning loop only — always finish
 // with a normal run.
+// --report scores the current data.mjs instead of rendering it — no PNG, no HTML file — so two
+// candidate layouts can be compared on measurement before spending a render on either.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const draft = process.argv.includes("--draft");
-  const g = geometry(data);
-  const out = await renderFile(await sheet(), `${import.meta.dirname}/banzuke.png`, {
-    devicePixelRatio: draft ? 1 : 2,
-    html: `${import.meta.dirname}/banzuke.html`,
-  });
-  const ratio = (g.sheetW / g.sheetH).toFixed(2);
-  console.log(
-    `${out.width}×${out.height} px (${ratio}:1), ${out.ms}ms → ${out.path}${draft ? " (draft)" : ""}`,
-  );
-  // Overflowing the target ratio a little is fine — 1.7:1 still posts uncropped. Warn only once
-  // the sheet is taller than square, which is the shape social previews cut the top off.
-  if (g.cropRisk) {
-    console.warn(
-      `The sheet is ${ratio}:1, taller than the ${SAFE_ASPECT}:1 social previews crop to, and it\n` +
-        "cannot get shorter at the maximum width. Move titles into a wall tier, or lower\n" +
-        "WALL.sizes, and re-run.",
+  if (process.argv.includes("--report")) {
+    const r = await report();
+    const ratio = r.ratio.toFixed(2);
+    console.log(
+      `${r.canvas[0]}×${r.canvas[1]} (${ratio}:1)${r.clamped ? ", clamped" : ""}` +
+        `${r.cropRisk ? ", CROP RISK" : ""}`,
+    );
+    console.log(`coverage: ${(r.coverage * 100).toFixed(1)}% of the canvas is ink`);
+    console.log(`ladder: ${formatLadder(r.ladder)}`);
+    for (const cell of r.slack.filter((c) => c.slack > 20)) {
+      console.log(
+        `slack: "${cell.name}" got ${cell.got}px against a ${cell.need}px need ` +
+          `(+${cell.slack}px unused)`,
+      );
+    }
+    for (const cell of r.slack.filter((c) => c.fill !== null && c.fill < STARVED_FILL)) {
+      console.log(
+        `starved: "${cell.name}" types at ${(cell.fill * 100).toFixed(1)}% of its row's line box ` +
+          `— pin cols: on it in data.mjs to shrink its own row box without moving the canvas`,
+      );
+    }
+    console.log(`squeeze: ${r.squeeze} title(s) drawn narrower than their natural width`);
+  } else {
+    const draft = process.argv.includes("--draft");
+    const g = geometry(data);
+    const out = await renderFile(await sheet(), `${import.meta.dirname}/banzuke.png`, {
+      devicePixelRatio: draft ? 1 : 2,
+      html: `${import.meta.dirname}/banzuke.html`,
+    });
+    const ratio = (g.sheetW / g.sheetH).toFixed(2);
+    console.log(
+      `${out.width}×${out.height} px (${ratio}:1), ${out.ms}ms → ${out.path}${draft ? " (draft)" : ""}`,
+    );
+    // Overflowing the target ratio a little is fine — 1.7:1 still posts uncropped. Warn only once
+    // the sheet is taller than square, which is the shape social previews cut the top off.
+    if (g.cropRisk) {
+      console.warn(
+        `The sheet is ${ratio}:1, taller than the ${SAFE_ASPECT}:1 social previews crop to, and it\n` +
+          "cannot get shorter at the maximum width. Move titles into a wall tier, or lower\n" +
+          "WALL.sizes, and re-run.",
+      );
+    }
+    // The rendering half of the job is the easy half. This line is the reminder that the sheet has
+    // not been checked yet, printed where whoever ran it is already looking — a note in the docs
+    // loses to a tool result every time.
+    console.log(
+      "Not done yet → open banzuke.png as an image and check it: is it densely filled,\n" +
+        "are the margins aligned, does #1 read as the biggest thing? Fix, then re-run.",
     );
   }
-  // The rendering half of the job is the easy half. This line is the reminder that the sheet has
-  // not been checked yet, printed where whoever ran it is already looking — a note in the docs
-  // loses to a tool result every time.
-  console.log(
-    "Not done yet → open banzuke.png as an image and check it: is it densely filled,\n" +
-      "are the margins aligned, does #1 read as the biggest thing? Fix, then re-run.",
-  );
 }
