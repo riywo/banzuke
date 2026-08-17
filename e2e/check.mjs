@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { RUNTIMES, runtimeFiles, template } from "../scripts/runtimes.mjs";
 import templateData from "../skills/banzuke/template/data.mjs";
 import { TITLES } from "./task.mjs";
@@ -52,9 +52,32 @@ note(`project: ${path.relative(work, project) || "."}`);
 // ---------- the project is complete and self-contained ----------
 
 // banzuke.png is not in this list: `rendered` above already selected on it.
-for (const f of ["package.json", "data.mjs", "banzuke.mjs", "lib/index.mjs", "banzuke.html"]) {
+for (const f of [
+  "package.json",
+  "data.mjs",
+  "banzuke.mjs",
+  "lib/index.mjs",
+  "banzuke.html",
+  "README.md",
+]) {
   assert.ok(existsSync(path.join(project, f)), `missing from the project: ${f}`);
 }
+
+// The README's last job is to say where the project came from. Take the link out of SKILL.md's
+// own credit line rather than hand-copying it, so that moving the repo cannot leave this
+// asserting on a stale URL — and assert the line was actually found, or a reworded SKILL.md would
+// turn this into a search for undefined that nothing can fail.
+const skillMd = readFileSync(
+  fileURLToPath(new URL("../skills/banzuke/SKILL.md", import.meta.url)),
+  "utf8",
+);
+const credit = /Powered by the \[banzuke\]\((https?:\/\/\S+?)\)/.exec(skillMd)?.[1];
+assert.ok(credit, "SKILL.md no longer states the 'Powered by the [banzuke](…)' credit line");
+const readme = readFileSync(path.join(project, "README.md"), "utf8");
+assert.ok(
+  readme.includes(credit),
+  `the project's README.md does not link back to ${credit} — the credit line in SKILL.md's README step was dropped`,
+);
 
 // Which runtime the agent scaffolded for, read off the runtime-specific files it kept. SKILL.md
 // has it delete the other two runtimes' files, so exactly one runtime's set survives — anything
