@@ -13,10 +13,57 @@ import { scaffold } from "./helpers/scaffold.mjs";
 
 /** Copy the template with `data` in place and call its sheet() in-process (no PNG render). */
 async function sheetFor(name, data) {
-  const dir = scaffold(name, data);
-  const { sheet } = await import(pathToFileURL(path.join(dir, "banzuke.mjs")).href);
+  const { sheet } = await templateFor(name, data);
   return sheet();
 }
+
+/** The scaffolded template's module — `sheet()` and `geometry()` both come from here. */
+async function templateFor(name, data) {
+  const dir = scaffold(name, data);
+  return import(pathToFileURL(path.join(dir, "banzuke.mjs")).href);
+}
+
+const bulk = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1}`);
+
+/** Comfortably inside one minimum-width canvas. */
+const SPARSE = {
+  title: "Sparse",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+    { name: "Ranked A", layout: "ranked", items: bulk("a", 6), color: "#1b50a8" },
+    { name: "Ranked B", layout: "ranked", items: bulk("b", 8), color: "#f4c20d" },
+    { name: "Good", layout: "wall", items: bulk("g", 6) },
+    { name: "So-so", layout: "wall", items: bulk("s", 5) },
+  ],
+};
+
+/** Needs a wider canvas than the minimum, but still fits one. */
+const MEDIUM = {
+  title: "Medium",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 5), color: "#d62828" },
+    { name: "Ranked A", layout: "ranked", items: bulk("a", 8), color: "#1b50a8" },
+    { name: "Ranked B", layout: "ranked", items: bulk("b", 12), color: "#f4c20d" },
+    { name: "Good", layout: "wall", items: bulk("g", 60) },
+    { name: "So-so", layout: "wall", items: bulk("s", 80) },
+  ],
+};
+
+/** ~390 titles: the shape that motivated the change. Cannot reach 16:9 even at the cap. */
+const DENSE = {
+  title: "Dense",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 10), color: "#d62828" },
+    { name: "Ranked A", layout: "ranked", items: bulk("a", 10), color: "#1b50a8" },
+    { name: "Ranked B", layout: "ranked", items: bulk("b", 20), color: "#f4c20d" },
+    { name: "Good", layout: "wall", items: bulk("g", 96) },
+    { name: "So-so", layout: "wall", items: bulk("o", 124) },
+    { name: "Seen", layout: "wall", items: bulk("s", 128) },
+  ],
+};
 
 // JSON.stringify drops an undefined color, so a colorless tier lands in data.mjs without the key.
 const tier = (name, layout, items, color) => ({ name, layout, items, color });
@@ -314,4 +361,57 @@ test("a large sheet stays consistent (40 featured, 6 ranked tiers, 200-item wall
   const n = 40 + 6 * 9;
   assertRanks(html, n);
   assert.ok(html.includes(`>${n + 200} titles<`));
+});
+
+// ---- geometry: the canvas is solved, not fixed ----
+// Widths are data-dependent, so these assert relations (wider / on-ratio / flagged) rather than
+// magic numbers — except the minimum, which is the documented floor.
+
+test("geometry: a sparse sheet sits at the minimum width, on the target ratio", async () => {
+  const { geometry } = await templateFor("geom-sparse", SPARSE);
+  const g = geometry();
+  assert.equal(g.sheetW, 1024);
+  assert.equal(g.sheetH, Math.round((g.sheetW * 9) / 16));
+  assert.equal(g.clamped, false);
+  assert.ok(g.bandH > 0, "the band collapsed");
+});
+
+test("geometry: more data widens the canvas instead of lengthening it", async () => {
+  const { geometry } = await templateFor("geom-widen", SPARSE);
+  const small = geometry();
+  const big = geometry(MEDIUM);
+  assert.ok(big.sheetW > small.sheetW, `expected a wider canvas, got ${big.sheetW}`);
+  assert.equal(big.sheetH, Math.round((big.sheetW * 9) / 16));
+  assert.equal(big.clamped, false);
+  // sideways, not downward: the walls answered the extra data with columns
+  assert.ok(big.wallPlan[0].cols > small.wallPlan[0].cols, "the walls should have gained columns");
+});
+
+test("geometry: data that cannot reach the ratio keeps the cap and overflows, flagged", async () => {
+  const { geometry } = await templateFor("geom-clamp", SPARSE);
+  const g = geometry(DENSE);
+  assert.equal(g.sheetW, 2048);
+  assert.equal(g.clamped, true);
+  assert.ok(
+    g.sheetH > Math.round((g.sheetW * 9) / 16),
+    "an overflowing sheet is taller than its target, not crushed into it",
+  );
+  assert.ok(g.bandH >= g.bandFloor, "the band must not fall below its legibility floor");
+});
+
+test("geometry: only a sheet still taller than square counts as a crop risk", async () => {
+  const { geometry } = await templateFor("geom-crop", SPARSE);
+  // Overflowing 16:9 by a little is not a crop risk — 1.7:1 is still well inside X's safe band.
+  assert.equal(geometry(DENSE).cropRisk, false);
+  const huge = geometry({
+    title: "Huge",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
+      { name: "Ranked", layout: "ranked", items: bulk("r", 20), color: "#1b50a8" },
+      { name: "Wall", layout: "wall", items: bulk("w", 2000) },
+    ],
+  });
+  assert.equal(huge.clamped, true);
+  assert.equal(huge.cropRisk, true);
 });
