@@ -905,15 +905,13 @@ test("band grid: a tier's own `cols:` reaches the renderer, not just geometry", 
 // (which never draws band content at all — it renders blank in the first case, and simply doesn't
 // exist as a code path for the second — so neither crash is possible there).
 
-// `groupColumns` used to be computed unconditionally, before the `ranked.length > 0` gate that
-// decides whether it's even used. With a featured tier, zero ranked tiers, and a wall tier moved
-// into the band via `row:`, `planAt()`'s `split` is false (nothing to share the width with, by its
-// own reasoning) so the featured column claims the whole inner width and `g.rightW` degenerates to
-// 1px — `wallTier` then divides that sliver into columns and gets a negative `avail`. Gating the
-// computation on the same condition its consumer already used to check is the fix; this pins that
-// the fixture renders instead of throwing.
-test("band grid: a `row:`'d wall tier with a featured tier but no ranked tiers does not crash", async () => {
-  const { sheet } = await templateFor("grid-no-ranked-wall-row", {
+// `planAt()` used to split the sheet's width between the featured column and the band only when
+// there was a *ranked* tier to share it with, which a `row:`'d wall tier is not — so a band holding
+// only a wall was handed the 1px `rightW` floors at, `wallTier` divided that sliver into columns
+// and got a negative `avail`, and the tier was dropped from the sheet to avoid the throw. Anything
+// in the band claims that side now, so the wall is laid out rather than merely not crashing.
+test("band grid: a `row:`'d wall tier with a featured tier but no ranked tiers gets half the sheet", async () => {
+  const { sheet, geometry } = await templateFor("grid-no-ranked-wall-row", {
     title: "T",
     unit: "titles",
     tiers: [
@@ -921,8 +919,125 @@ test("band grid: a `row:`'d wall tier with a featured tier but no ranked tiers d
       { name: "WallInBand", layout: "wall", items: bulk("w", 50), row: 1 },
     ],
   });
+  const g = geometry();
+  assert.ok(
+    g.featW < g.inner && g.rightW > 1,
+    `the featured column took the whole ${g.inner}px (featW ${g.featW}, rightW ${g.rightW})`,
+  );
   const html = await sheet();
   assert.match(html, />Featured</);
+  for (const item of ["w1", "w50"]) assert.ok(html.includes(`>${item}<`), item);
+});
+
+// The mirror of the case above: with the split keyed to ranked tiers only, moving one band tier
+// between `wall` and `ranked` also moved the sheet's whole width decision, so the canvas jumped
+// (1344×756 as a wall against 1024×576 as a ranked tier) on a change that is supposed to be about
+// how one tier is packed. A wall is the cheaper of the two, so it must never cost a bigger sheet.
+test("band grid: flipping a lone band tier between wall and ranked does not swing the canvas", async () => {
+  const band = (layout) => ({
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
+      { name: "Band", layout, items: bulk("b", 30), row: 1 },
+    ],
+  });
+  const { geometry } = await templateFor("grid-flip-wall-ranked", band("wall"));
+  const asWall = geometry();
+  const asRanked = geometry(band("ranked"));
+  assert.ok(
+    asWall.sheetW <= asRanked.sheetW && asWall.sheetH <= asRanked.sheetH,
+    `wall ${asWall.sheetW}×${asWall.sheetH} should not outgrow ranked ` +
+      `${asRanked.sheetW}×${asRanked.sheetH}`,
+  );
+  assert.ok(asWall.rightW > 1, "the band's wall needs a real width to lay out into");
+});
+
+// A row hands every one of its cells the same height, so a cell holding fewer rows types them
+// bigger. The bound used to read the band as the single stacked column it was before rows and
+// cells — every ranked tier's rows summed, divided into the band once — which is not a height any
+// cell is actually drawn at once two of them stand side by side: two 12-item tiers sharing a row
+// each got the *whole* row, not half of it, so their titles came out ~2.3× the size the bound had
+// approved. Measured on this fixture at 39ea20f: ranked #1 rendered at 29px against the featured
+// tier's last row at 16px — the ranking upside down. Judging every cell puts it back.
+test("band grid: the hierarchy bound is judged against every cell, not the band as one stack", async () => {
+  const { geometry, sheet } = await templateFor("grid-hier-cells", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
+      { name: "Left", layout: "ranked", items: bulk("l", 12), row: 1, column: 1, color: "#1b50a8" },
+      {
+        name: "Right",
+        layout: "ranked",
+        items: bulk("r", 12),
+        row: 1,
+        column: 2,
+        color: "#f4c20d",
+      },
+      { name: "Wall", layout: "wall", items: bulk("w", 200) },
+    ],
+  });
+  const g = geometry();
+  assert.equal(g.bandRowPlan.length, 1, "Left and Right share a `row:`");
+  assert.equal(g.bandRowPlan[0].cells.length, 2, "different `column:`s, so two cells side by side");
+
+  // Every cell, not just the hungriest: each divides the row's height by its own rows.
+  const H = g.bandRowHeights[0];
+  for (const cell of g.bandRowPlan[0].cells) {
+    const top = ((H - cell.fixed) / cell.weighted) * Math.max(...cell.weights);
+    assert.ok(
+      top < g.featRowH,
+      `cell ${cell.stack.map((t) => t.name)}: its top row (${top}) rivals a featured one (${g.featRowH})`,
+    );
+  }
+
+  // What the bound is derived to protect, read off the render rather than the geometry: no ranked
+  // tier's first title may be typed larger than the featured tier's last.
+  const sizes = spanSizes(await sheet());
+  const featured = sizes.slice(1, 1 + 6); // the masthead title is span 0
+  const left = sizes.slice(1 + 6, 1 + 6 + 12);
+  const right = sizes.slice(1 + 6 + 12, 1 + 6 + 24);
+  for (const [name, tier] of [
+    ["Left", left],
+    ["Right", right],
+  ]) {
+    assert.ok(
+      tier[0] <= featured.at(-1),
+      `${name}'s first title (${tier[0]}px) out-types the featured tier's last (${featured.at(-1)}px)`,
+    );
+  }
+});
+
+// A tier's own `cols:` reached the height math and the markup but not the column solver, which
+// re-derived every ranked tier's row count from the *shared* count instead. A tier pinned narrow
+// therefore looked to the solver like it had far fewer (so far taller) rows than it really has, and
+// the bound rejected splits the sheet could have taken — the pin, whose whole point is to hold one
+// tier narrow while the rest of the sheet spreads out, made the sheet worse instead of better.
+test("band grid: a tier's own `cols:` is counted by the column solver, not just the height math", async () => {
+  const pinned = (pin) => ({
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 14), color: "#d62828" },
+      { name: "Pinned", layout: "ranked", items: bulk("p", 16), ...(pin ? { cols: 1 } : {}) },
+      { name: "Other", layout: "ranked", items: bulk("o", 16) },
+      { name: "Wall", layout: "wall", items: bulk("w", 150) },
+    ],
+  });
+  const { geometry } = await templateFor("grid-cols-solver", pinned(true));
+  const withPin = geometry();
+  const noPin = geometry(pinned(false));
+  assert.equal(withPin.bandRowPlan[0].cells[0].rows[0], 16, "`cols: 1` over 16 items is 16 rows");
+  // Holding one tier to a single column costs the solver nothing — its rows only get shorter — so
+  // the rest of the sheet may split at least as wide as it would have without the pin.
+  assert.ok(
+    withPin.rankCols > noPin.rankCols,
+    `the pin should free the split (${noPin.rankCols} unpinned, ${withPin.rankCols} pinned)`,
+  );
+  assert.equal(noPin.clamped, true, "unpinned, this data cannot reach the target ratio");
+  assert.equal(withPin.clamped, false, "pinned, the wider split gets it back onto the ratio");
+  assert.ok(topRankedRow(withPin) < withPin.featRowH, "the wider split still clears the bound");
 });
 
 // The renderer's own `colsOf` used to read `t.cols ?? g.rankCols` with no clamp, unlike `shape()`'s

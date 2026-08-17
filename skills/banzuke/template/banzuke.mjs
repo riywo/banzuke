@@ -255,6 +255,20 @@ function wallCols(n, em, inner) {
   return Math.ceil(n / Math.ceil(n / maxCols));
 }
 
+/**
+ * How many columns a band tier deals into: its own `cols:` from data.mjs when it sets one, the
+ * sheet's shared count otherwise. Floored at 1, because a stray `0` or negative in data.mjs turns
+ * `n / cols` into `Infinity` rows and everything built on it into a broken canvas; capped at the
+ * tier's own item count, because a tier cannot fill more columns than it has items.
+ *
+ * One function rather than one clamp per caller: the height math, the column solver and the markup
+ * all divide by this number, and if any two of them disagree the width one hands out and the
+ * columns another draws drift apart — an over-wide `cols:` over-credits a cell's share of the row
+ * and starves its neighbor's `avail` negative.
+ */
+const tierCols = (tier, cols) =>
+  Math.min(Math.max(1, tier.cols ?? cols), Math.max(1, tier.items.length));
+
 // ---- Geometry: solving the canvas ----
 // All of this is pure arithmetic — no text measurement, no rendering — so searching ~65
 // candidate widths costs nothing. Everything the sheet's boxes need comes out of one call.
@@ -312,15 +326,6 @@ function bandRows(band) {
   return [...byKey.values()];
 }
 
-/** Rows per ranked tier at a given column count, and the weighting that shares the band out */
-function rankedShape(ranked, cols) {
-  const rows = ranked.map((t) =>
-    Math.ceil(t.items.length / Math.min(cols, Math.max(1, t.items.length))),
-  );
-  const weights = ranked.map((_, i) => TIER_WEIGHT ** (ranked.length - 1 - i));
-  return { rows, weights, weighted: rows.reduce((sum, r, i) => sum + r * weights[i], 0) };
-}
-
 /**
  * The tallest a ranked row may get before the first title of a ranked tier would out-type the
  * last row of the featured one. Derived from the type knobs rather than guessed — including the
@@ -334,35 +339,6 @@ function hierCeiling(featRowH, weights) {
   // rows do, so there is nothing for the bound to say.
   if (TYPE.ranked.cap <= last) return Number.POSITIVE_INFINITY;
   return last / (TYPE.ranked.rowFill * Math.max(...weights, 1));
-}
-
-/**
- * RANK_COLS may be a number, or "auto": as many columns as RANK_COL_W wants (up to
- * RANK_COLS_MAX), but never so many that the ranked rows grow to rival the featured ones.
- * Splitting a tier into more columns makes each row *taller* (fewer rows share the same band),
- * and a sheet whose rank stops reading by size has lost its whole argument — so hierarchy wins
- * over row width.
- *
- * Each count is judged against the band *that count* would be handed — `band(cols)`, not one
- * band measured once. On the fitting path the canvas fixes the band and every count sees the
- * same one; on the overflow path the band is the legibility floor, and the floor falls as the
- * columns rise (fewer rows per column need less height). Judging a wide split against the narrow
- * split's roomier floor passes it on a band it never gets, which is how a ranked title ends up
- * drawn at twice the size of the featured one above it.
- */
-function resolveRankCols({ rightW, band, ranked, rankedFixed }) {
-  if (RANK_COLS !== "auto") return RANK_COLS;
-  const want = Math.min(RANK_COLS_MAX, Math.max(1, Math.round(rightW / RANK_COL_W)));
-  if (ranked.length === 0) return want;
-  for (let cols = want; cols > 1; cols--) {
-    const { avail, featRowH } = band(cols);
-    // No featured tier, or no band to speak of: hierarchy has no opinion, and reading one out of
-    // negative heights would flip the comparison and collapse the sheet to a single column.
-    if (featRowH <= 0 || avail <= 0) return want;
-    const { weighted, weights } = rankedShape(ranked, cols);
-    if ((avail - rankedFixed) / weighted <= hierCeiling(featRowH, weights)) return cols;
-  }
-  return 1;
 }
 
 /**
@@ -409,9 +385,7 @@ function derive(p, bandH) {
  * from this floor, and a fractional canvas height cannot be filled exactly.
  */
 function shape(p, cols) {
-  // `t.cols` comes straight from data.mjs — floor it at 1 so a stray `0` or negative doesn't turn
-  // this into a division by zero a few lines down (`Infinity` rows, and everything built on it).
-  const colsOf = (t) => Math.min(Math.max(1, t.cols ?? cols), Math.max(1, t.items.length));
+  const colsOf = (t) => tierCols(t, cols);
 
   // A cell is one stack of tiers. Ranked stacks share whatever height the row gets; a wall stack
   // is worth exactly what its lines add up to, so it asks for that and no more.
@@ -495,6 +469,54 @@ function shape(p, cols) {
   return { rankCols: cols, bandRowPlan: rows, rigidH, fixedH, weightedDemand, bandFloor };
 }
 
+/**
+ * RANK_COLS may be a number, or "auto": as many columns as RANK_COL_W wants (up to
+ * RANK_COLS_MAX), but never so many that the ranked rows grow to rival the featured ones.
+ * Splitting a tier into more columns makes each row *taller* (fewer rows share the same band),
+ * and a sheet whose rank stops reading by size has lost its whole argument — so hierarchy wins
+ * over row width.
+ *
+ * Each count is judged against the band *that count* would be handed — `bandOf(shape)`, not one
+ * band measured once. On the fitting path the canvas fixes the band and every count sees the
+ * same one; on the overflow path the band is the legibility floor, and the floor falls as the
+ * columns rise (fewer rows per column need less height). Judging a wide split against the narrow
+ * split's roomier floor passes it on a band it never gets, which is how a ranked title ends up
+ * drawn at twice the size of the featured one above it.
+ *
+ * And against *every* ranked cell of that band, not one stack. A row hands all of its cells the
+ * same height, so the cell with the fewest rows types them biggest — judging one cell (or the band
+ * as if it were a single column of tiers, which is all it was before rows and cells) passes a count
+ * on the strength of whichever cell happened to be measured, while the one beside it out-types the
+ * featured column. Every cell divides its own height by its own rows, so every cell gets asked.
+ */
+function resolveRankCols(p, bandOf) {
+  if (RANK_COLS !== "auto") return RANK_COLS;
+  const want = Math.min(RANK_COLS_MAX, Math.max(1, Math.round(p.rightW / RANK_COL_W)));
+  for (let cols = want; cols > 1; cols--) {
+    const s = shape(p, cols);
+    const bandH = bandOf(s);
+    const { avail, featRowH } = bandParts(p, bandH);
+    // No featured tier, or no band to speak of: hierarchy has no opinion, and reading one out of
+    // negative heights would flip the comparison and collapse the sheet to a single column.
+    if (featRowH <= 0 || avail <= 0) return want;
+    const { bandRowHeights } = derive({ ...p, ...s }, bandH);
+    const lastRow = s.bandRowPlan.length - 1;
+    const clears = s.bandRowPlan.every((r, i) =>
+      r.cells.every((c) => {
+        // A wall cell types itself off its own `size:`, so the band's height never sets it.
+        if (c.walls) return true;
+        // border-box: a non-last row's declared height already contains the rule under it, so what
+        // its cells actually have to type into is what the rule leaves — the same content height
+        // the markup divides by, or the bound would judge a height nothing is drawn at.
+        const content = bandRowHeights[i] - (i < lastRow ? DIV : 0);
+        return (content - c.fixed) / c.weighted <= hierCeiling(featRowH, c.weights);
+      }),
+    );
+    if (clears) return cols;
+  }
+  return 1;
+}
+
 /** Lay the data out against one candidate sheet width and report whether it fits */
 function planAt(sheetW, { featured, ranked, walls, band }) {
   const sheetH = Math.round(sheetW / ASPECT);
@@ -502,8 +524,11 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
   const innerH = sheetH - 2 * GROUND - 2 * BW;
 
   // The featured column stops widening at FEAT_MAX_W: past that it is one column of titles in a
-  // lot of space, and the ranked side uses the width better.
-  const split = featured && ranked.length > 0;
+  // lot of space, and the ranked side uses the width better. Anything in the band claims that
+  // side — a `row:`'d wall tier as much as a ranked one — so the split turns on the band being
+  // occupied, not on there being a ranked tier: otherwise a band holding only a wall is handed
+  // the 1px of width `rightW` floors at, with no room to lay a single column into.
+  const split = featured && band.length > 0;
   const featW = featured
     ? split
       ? Math.min(Math.round(inner * FEAT_SPLIT), FEAT_MAX_W)
@@ -524,7 +549,6 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
   const wallsH = wallPlan.reduce((sum, w) => sum + w.height, 0);
 
   const featRows = featured?.items.length ?? 0;
-  const rankedFixed = ranked.length * HDR_H + Math.max(0, ranked.length - 1) * DIV;
 
   const base = {
     sheetW,
@@ -538,7 +562,6 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
     ranked,
     walls,
     featRows,
-    rankedFixed,
     bandRows: bandRows(band),
     // Only the featured layout wraps the band in a box of its own, and that box's bottom rule is
     // inside the height it is given — so with a featured tier the tiers get DIV less than bandH.
@@ -551,12 +574,7 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
   // know how tall a featured row ended up before it can avoid out-growing one.
   const bandH = innerH - MAST_H - wallsH - FOOT_H;
   // The canvas fixes the band here, so every candidate column count is offered the same one.
-  const cols = resolveRankCols({
-    rightW,
-    band: () => bandParts(base, bandH),
-    ranked,
-    rankedFixed,
-  });
+  const cols = resolveRankCols(base, () => bandH);
   const p = { ...base, ...shape(base, cols) };
 
   // A candidate width that cannot clear the band's legibility floor does not fit.
@@ -575,12 +593,7 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
  * that comes back is already consistent with the sheet it gets.
  */
 function overflow(p) {
-  const cols = resolveRankCols({
-    rightW: p.rightW,
-    band: (c) => bandParts(p, shape(p, c).bandFloor),
-    ranked: p.ranked,
-    rankedFixed: p.rankedFixed,
-  });
+  const cols = resolveRankCols(p, (s) => s.bandFloor);
   const re = { ...p, ...shape(p, cols) };
   const band = derive(re, re.bandFloor);
   const sheetH = 2 * GROUND + 2 * BW + MAST_H + band.bandH + re.wallsH + FOOT_H;
@@ -619,7 +632,7 @@ export function geometry(source = data) {
 
 export async function sheet() {
   const g = geometry(data);
-  const { tiers, numbered, featured, ranked } = partition(data);
+  const { tiers, numbered, featured, band: bandTiers } = partition(data);
   const total = tiers.reduce((sum, t) => sum + t.items.length, 0);
 
   // Running numbers (featured → ranked, numbered in data order)
@@ -661,21 +674,16 @@ export async function sheet() {
   });
 
   // The band's right side: one box per row, stacked. Within a row the tiers stand side by side,
-  // sharing the width in proportion to how many columns each one asked for — a tier's own `cols:`
-  // if it set one, the row's shared `g.rankCols` otherwise. Clamped exactly like `shape()`'s own
-  // `colsOf` (Math.min/Math.max at 1 and at the item count): geometry and markup must not disagree
-  // about how many columns a tier has, or the width this loop hands out and the columns `rankedTier`
-  // actually draws drift apart — an unclamped `cols: 0` silently drops every item in that column
-  // split (`Array.from({ length: 0 }, …)` is empty), and an unclamped `cols:` bigger than the row's
-  // real column count over-credits that cell's width share, starving its neighbor's `avail` negative.
-  const colsOf = (t) => Math.min(Math.max(1, t.cols ?? g.rankCols), Math.max(1, t.items.length));
+  // sharing the width in proportion to how many columns each one asked for — the same `tierCols`
+  // the geometry divided their heights by, so the width this loop hands out and the columns
+  // `rankedTier` actually draws cannot drift apart.
+  const colsOf = (t) => tierCols(t, g.rankCols);
 
-  // planAt() only splits the width between featured and the right side when there's a ranked tier
-  // to share it with (`split = featured && ranked.length > 0`); with a `row:`'d wall but zero
-  // ranked tiers, `g.rightW` degenerates to a 1px sliver that has nothing valid to lay out into.
-  // Skip the computation in that case rather than let `wallTier` fail on a negative column width —
-  // the same condition already gates whether the result is even used, below.
-  const bandRight = !featured || ranked.length > 0;
+  // An empty band still costs `g.bandH`, but `planAt()` gives the featured column the whole width
+  // when there is nothing to share it with, leaving `g.rightW` at the 1px it floors at. Skip the
+  // right side entirely on that shape rather than let `wallTier` divide a sliver into columns and
+  // fail on a negative width — the same condition the width was split on.
+  const bandRight = !featured || bandTiers.length > 0;
   const groupColumns = bandRight
     ? await Promise.all(
         g.bandRowPlan.map(async (r, ri) => {
