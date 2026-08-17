@@ -147,7 +147,7 @@ async function row({ item, rank, size, colW, color, stretch, last }) {
   const span = await fitT(titleOf(item), { size, avail, stretch });
   const bb = last ? "" : `border-bottom:${SEP}px solid ${T.ink};`;
   return `<div style="flex:1;display:flex;align-items:center;min-height:0;overflow:hidden;border-left:${SPINE}px solid ${color};background:${T.bg};${bb}">
-    ${numbered ? `<div style="width:${rankW}px;flex:none;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${rank}</div>` : ""}
+    ${numbered ? `<div style="width:${rankW}px;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${rank}</div>` : ""}
     <div style="flex:1;min-width:0;overflow:hidden;padding:0 ${PAD}px 0 ${gap}px;line-height:${LINE}">${span}</div>
   </div>`;
 }
@@ -662,54 +662,68 @@ export async function sheet() {
 
   // The band's right side: one box per row, stacked. Within a row the tiers stand side by side,
   // sharing the width in proportion to how many columns each one asked for — a tier's own `cols:`
-  // if it set one, the row's shared `g.rankCols` otherwise.
-  const groupColumns = await Promise.all(
-    g.bandRowPlan.map(async (r, ri) => {
-      const lastRow = ri === g.bandRowPlan.length - 1;
-      // border-box again: bandRowHeights[ri] already reserves this row's own rule (see derive()),
-      // so the row's declared height stays the full value — only the *content* math below (cell
-      // widths, the ranked unit) works off what the rule leaves behind.
-      const boxH = g.bandRowHeights[ri];
-      const rowH = boxH - (lastRow ? 0 : DIV);
-      const colsOf = (t) => t.cols ?? g.rankCols;
-      const weightOf = (c) => c.stack.reduce((sum, t) => sum + colsOf(t), 0);
-      const totalCols = r.cells.reduce((sum, c) => sum + weightOf(c), 0);
-      let used = 0;
-      const cells = await Promise.all(
-        r.cells.map(async (cell, i) => {
-          const lastCell = i === r.cells.length - 1;
-          const w = lastCell
-            ? g.rightW - used
-            : Math.floor((g.rightW * weightOf(cell)) / totalCols);
-          used += w;
-          const cellRule = lastCell ? "" : `border-right:${DIV}px solid ${T.ink};`;
-          const cellW = w - (lastCell ? 0 : DIV);
-          // A wall stack keeps its own height; a ranked stack divides the row by weight.
-          const unit = cell.walls ? 0 : (rowH - cell.fixed) / cell.weighted;
-          const blocks = await Promise.all(
-            cell.stack.map((tier, j) =>
-              cell.walls
-                ? wallTier(tier, cell.walls[j].size, cell.walls[j].cols, cellW, false)
-                : rankedTier({
-                    tier,
-                    startRank: startRank.get(tier),
-                    height: HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit),
-                    width: cellW,
-                    cols: colsOf(tier),
-                    isLast: j === cell.stack.length - 1,
-                  }),
-            ),
+  // if it set one, the row's shared `g.rankCols` otherwise. Clamped exactly like `shape()`'s own
+  // `colsOf` (Math.min/Math.max at 1 and at the item count): geometry and markup must not disagree
+  // about how many columns a tier has, or the width this loop hands out and the columns `rankedTier`
+  // actually draws drift apart — an unclamped `cols: 0` silently drops every item in that column
+  // split (`Array.from({ length: 0 }, …)` is empty), and an unclamped `cols:` bigger than the row's
+  // real column count over-credits that cell's width share, starving its neighbor's `avail` negative.
+  const colsOf = (t) => Math.min(Math.max(1, t.cols ?? g.rankCols), Math.max(1, t.items.length));
+
+  // planAt() only splits the width between featured and the right side when there's a ranked tier
+  // to share it with (`split = featured && ranked.length > 0`); with a `row:`'d wall but zero
+  // ranked tiers, `g.rightW` degenerates to a 1px sliver that has nothing valid to lay out into.
+  // Skip the computation in that case rather than let `wallTier` fail on a negative column width —
+  // the same condition already gates whether the result is even used, below.
+  const bandRight = !featured || ranked.length > 0;
+  const groupColumns = bandRight
+    ? await Promise.all(
+        g.bandRowPlan.map(async (r, ri) => {
+          const lastRow = ri === g.bandRowPlan.length - 1;
+          // border-box again: bandRowHeights[ri] already reserves this row's own rule (see
+          // derive()), so the row's declared height stays the full value — only the *content* math
+          // below (cell widths, the ranked unit) works off what the rule leaves behind.
+          const boxH = g.bandRowHeights[ri];
+          const rowH = boxH - (lastRow ? 0 : DIV);
+          const weightOf = (c) => c.stack.reduce((sum, t) => sum + colsOf(t), 0);
+          const totalCols = r.cells.reduce((sum, c) => sum + weightOf(c), 0);
+          let used = 0;
+          const cells = await Promise.all(
+            r.cells.map(async (cell, i) => {
+              const lastCell = i === r.cells.length - 1;
+              const w = lastCell
+                ? g.rightW - used
+                : Math.floor((g.rightW * weightOf(cell)) / totalCols);
+              used += w;
+              const cellRule = lastCell ? "" : `border-right:${DIV}px solid ${T.ink};`;
+              const cellW = w - (lastCell ? 0 : DIV);
+              // A wall stack keeps its own height; a ranked stack divides the row by weight.
+              const unit = cell.walls ? 0 : (rowH - cell.fixed) / cell.weighted;
+              const blocks = await Promise.all(
+                cell.stack.map((tier, j) =>
+                  cell.walls
+                    ? wallTier(tier, cell.walls[j].size, cell.walls[j].cols, cellW, false)
+                    : rankedTier({
+                        tier,
+                        startRank: startRank.get(tier),
+                        height: HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit),
+                        width: cellW,
+                        cols: colsOf(tier),
+                        isLast: j === cell.stack.length - 1,
+                      }),
+                ),
+              );
+              return `<div style="width:${w}px;flex:none;display:flex;flex-direction:column;${cellRule}">${blocks.join("")}</div>`;
+            }),
           );
-          return `<div style="width:${w}px;flex:none;display:flex;flex-direction:column;${cellRule}">${blocks.join("")}</div>`;
+          // A wall row is exactly as tall as its lines, so the slack has to go to a row that can
+          // use it: the last row, whose cells share the band by weight instead of a fixed need.
+          const rowRule = lastRow ? "" : `border-bottom:${DIV}px solid ${T.ink};`;
+          const sizing = `height:${boxH}px;flex:none;${rowRule}`;
+          return `<div style="${sizing}display:flex;min-height:0">${cells.join("")}</div>`;
         }),
-      );
-      // A wall row is exactly as tall as its lines, so the slack has to go to a row that can use
-      // it: the last row, whose cells share the band by weight instead of a fixed need.
-      const rowRule = lastRow ? "" : `border-bottom:${DIV}px solid ${T.ink};`;
-      const sizing = `height:${boxH}px;flex:none;${rowRule}`;
-      return `<div style="${sizing}display:flex;min-height:0">${cells.join("")}</div>`;
-    }),
-  );
+      )
+    : [];
 
   let band = "";
   if (featured) {
@@ -721,11 +735,10 @@ export async function sheet() {
       color: featured.color ?? T.accent,
       stretch: TYPE.featured.stretch,
     });
-    const border = ranked.length > 0 ? `border-right:${DIV}px solid ${T.ink};` : "";
-    const rightSide =
-      ranked.length > 0
-        ? `<div style="width:${g.rightW}px;display:flex;flex-direction:column">${groupColumns.join("")}</div>`
-        : "";
+    const border = bandRight ? `border-right:${DIV}px solid ${T.ink};` : "";
+    const rightSide = bandRight
+      ? `<div style="width:${g.rightW}px;display:flex;flex-direction:column">${groupColumns.join("")}</div>`
+      : "";
     band = `<div style="height:${g.bandH}px;flex:none;display:flex;border-bottom:${DIV}px solid ${T.ink}">
       <div style="width:${g.featW}px;flex:none;display:flex;flex-direction:column;${border}">
         ${tierHeader(featured.name, featured.items.length)}

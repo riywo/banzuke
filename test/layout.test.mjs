@@ -715,7 +715,7 @@ test("band grid: with no `row:` anywhere, an earlier tier still reads taller tha
 // to appear) with a stack in the middle one is the fixture that would catch either compounding
 // silently dropping back to one level only.
 test("band grid: `row:` and `column:` together, TIER_WEIGHT compounds across rows and within a stack", async () => {
-  const { geometry } = await templateFor("grid-weight-compound", {
+  const DATA = {
     title: "T",
     unit: "titles",
     tiers: [
@@ -725,7 +725,8 @@ test("band grid: `row:` and `column:` together, TIER_WEIGHT compounds across row
       { name: "MidB", layout: "ranked", items: bulk("b", 6), row: 2, column: 1 },
       { name: "Bottom", layout: "ranked", items: bulk("c", 6), row: 3 },
     ],
-  });
+  };
+  const { geometry, sheet } = await templateFor("grid-weight-compound", DATA);
   const g = geometry();
   assert.equal(g.bandRowPlan.length, 3, "three flexible band rows: Top, Mid, Bottom");
   assert.equal(g.bandRowPlan[1].cells.length, 1, "MidA/MidB share a `column:`, so one cell");
@@ -745,6 +746,27 @@ test("band grid: `row:` and `column:` together, TIER_WEIGHT compounds across row
   assert.ok(
     Math.abs(ratio - TIER_WEIGHT ** 2) < 0.1,
     `top:bottom should compound to TIER_WEIGHT² (${(TIER_WEIGHT ** 2).toFixed(2)}), got ${ratio.toFixed(2)}`,
+  );
+
+  // The geometry-only assertions above hold on `2e482fa` too, since Task 1 built `bandRowPlan`
+  // before this task drew it — they pin the compounding, not this task's renderer. `sheet()` is
+  // what turns a 4-tier `ranked` list sharing a 3-row `bandRowPlan` into markup: at `2e482fa` that
+  // renderer still indexes `g.bandRowHeights[i]` by position in `ranked` (`ranked[3]`, "Bottom",
+  // reads `bandRowHeights[3]`, which does not exist), so it throws before ever reaching a span. A
+  // render that succeeds and keeps the same TIER_WEIGHT² gradient in its actual font sizes is what
+  // only this task's grid-aware renderer can produce.
+  const html = await sheet();
+  const spanSizes = [...html.matchAll(/<span style="[^"]*?font-size:([\d.]+)px/g)].map((m) =>
+    Number(m[1]),
+  );
+  // title(1) + Featured(4) precede the band; Top(6), MidA(6), MidB(6), Bottom(6) follow in order.
+  const topSize = spanSizes[1 + 4];
+  const bottomSize = spanSizes[1 + 4 + 6 + 6 + 6];
+  const renderedRatio = topSize / bottomSize;
+  assert.ok(
+    Math.abs(renderedRatio - TIER_WEIGHT ** 2) < 0.15,
+    `rendered top:bottom font sizes should also compound to TIER_WEIGHT² ` +
+      `(${(TIER_WEIGHT ** 2).toFixed(2)}), got ${renderedRatio.toFixed(2)} (${topSize} vs ${bottomSize})`,
   );
 });
 
@@ -766,4 +788,172 @@ test("band grid: a nonsense `cols:` still yields a finite canvas", async () => {
   for (const h of g.bandRowHeights) {
     assert.ok(Number.isFinite(h), `every band row height must be finite, got ${h}`);
   }
+});
+
+// takumi is border-box: a row's own declared height already reserves DIV px for its `border-bottom`
+// separator, so only a non-last row's *content* — what tierSizes actually gets to budget font size
+// against — is DIV px smaller than the row's declared height. The single-tier-per-row renderer this
+// replaced fed tierSizes the full declared height (no −DIV) for every row, over-budgeting a non-last
+// row's type by a hair; this task's grid renderer corrects it (see task-2-report.md, "a real
+// regression, found by measurement"). Pinning the *corrected* relationship here, analytically, off
+// public `geometry()` numbers and the template's own DIV/HDR_H/TYPE.ranked knobs — not by copying
+// one render's numbers — so a future refactor can't drift back to the over-budgeted version without
+// this failing.
+test("band grid: a non-last flexible row budgets its ranked type off content height, not the declared box height", async () => {
+  const { geometry, sheet } = await templateFor("grid-font-budget", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      // cols: 1 pins each tier to exactly `n` rows, decoupled from the canvas-width-dependent auto
+      // column split, so the row-content math below doesn't also have to reproduce that solve.
+      { name: "Top", layout: "ranked", items: bulk("t", 6), cols: 1 },
+      { name: "Bottom", layout: "ranked", items: bulk("b", 6), cols: 1 },
+    ],
+  });
+  const g = geometry();
+  assert.equal(
+    g.bandRowPlan.length,
+    2,
+    "two ranked tiers, one row each: Top non-last, Bottom last",
+  );
+
+  const DIV = 4;
+  const HDR_H = 24;
+  const TYPE_RANKED = { cap: 30, rowFill: 0.63, taper: 0.78 }; // mirrors TYPE.ranked in the "tuning knobs" section
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const ramp = (from, to, n) =>
+    Array.from({ length: n }, (_, i) => Math.round(lerp(from, to, n < 2 ? 0 : i / (n - 1))));
+  const expectedSizes = (rowBudget, n) => {
+    const from = Math.min(TYPE_RANKED.cap, Math.round(rowBudget * TYPE_RANKED.rowFill));
+    return ramp(from, Math.round(from * TYPE_RANKED.taper), n);
+  };
+  const n = 6;
+  // Non-last: its declared height reserves DIV for the rule below it, so content is height−DIV.
+  const topBudget = (g.bandRowHeights[0] - DIV - HDR_H) / n;
+  // Last: no rule below it, nothing reserved — content is the full declared height.
+  const bottomBudget = (g.bandRowHeights[1] - HDR_H) / n;
+
+  const html = await sheet();
+  const spanSizes = [...html.matchAll(/<span style="[^"]*?font-size:([\d.]+)px/g)].map((m) =>
+    Number(m[1]),
+  );
+  // title(1) + Featured(4) precede Top(6) then Bottom(6).
+  const top = spanSizes.slice(1 + 4, 1 + 4 + n);
+  const bottom = spanSizes.slice(1 + 4 + n, 1 + 4 + n + n);
+  assert.deepEqual(top, expectedSizes(topBudget, n), `non-last row's rendered sizes: ${top}`);
+  assert.deepEqual(bottom, expectedSizes(bottomBudget, n), `last row's rendered sizes: ${bottom}`);
+
+  // The regression this pins: budgeting off the declared height with no −DIV gives a strictly
+  // different (larger) sequence for the non-last row.
+  const regressedBudget = (g.bandRowHeights[0] - HDR_H) / n;
+  assert.notDeepEqual(
+    top,
+    expectedSizes(regressedBudget, n),
+    "must not match the un-border-box-corrected (larger) budget",
+  );
+});
+
+// Carry-over #2 (the brief): `sheet()` used to ignore a tier's own `cols:` and always split it by
+// the row's shared `g.rankCols`. `GRID`'s own "B" (`cols: 2` against a 10-item "A" that shares the
+// row's auto split) already exercises this in geometry — Task 1's `shape()` always read `t.cols`
+// correctly — but nothing checked that the *render* does too. It's a render-only bug: `cell.rows[j]`
+// (what `derive()` sized B's row height against) already comes from `shape()`'s own correctly-`cols:`
+// -aware count, so a renderer that silently fell back to `g.rankCols` for the `cols:` it passes to
+// `rankedTier` would still produce a canvas of the right height — just with B's row count (and so
+// its font-size budget) computed against the wrong divisor. Confirmed by disabling the fix locally
+// during development: B's rendered sizes jump from [21, 21, 20, …] to a cap-clipped [30, 30, 29, …]
+// (rows halve from 10 to 5, doubling the per-row budget) — a difference this test would catch.
+test("band grid: a tier's own `cols:` reaches the renderer, not just geometry", async () => {
+  const { geometry, sheet } = await templateFor("grid-cols-render", GRID);
+  const g = geometry();
+  const row = g.bandRowPlan[0];
+  const stackCell = row.cells.find((c) => !c.walls && c.stack.some((t) => t.name === "B"));
+  const j = stackCell.stack.findIndex((t) => t.name === "B");
+  assert.equal(stackCell.rows[j], 10, "B's own `cols: 2` over 20 items is 10 rows, geometry side");
+
+  const HDR_H = 24;
+  const TYPE_RANKED = { cap: 30, rowFill: 0.63, taper: 0.78 };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const ramp = (from, to, n) =>
+    Array.from({ length: n }, (_, i) => Math.round(lerp(from, to, n < 2 ? 0 : i / (n - 1))));
+  // GRID's band is a single row, so it's also the last row: no DIV subtraction (see the border-box
+  // test above for the non-last case).
+  const rowH = g.bandRowHeights[0];
+  const unit = (rowH - stackCell.fixed) / stackCell.weighted;
+  const heightForB = HDR_H + Math.round(stackCell.rows[j] * stackCell.weights[j] * unit);
+  const budget = (heightForB - HDR_H) / stackCell.rows[j];
+  const from = Math.min(TYPE_RANKED.cap, Math.round(budget * TYPE_RANKED.rowFill));
+  const expected = ramp(from, Math.round(from * TYPE_RANKED.taper), 20);
+
+  const html = await sheet();
+  const spanSizes = [...html.matchAll(/<span style="[^"]*?font-size:([\d.]+)px/g)].map((m) =>
+    Number(m[1]),
+  );
+  // title(1) + Featured(6) + A(10) precede B(20).
+  const bStart = 1 + 6 + 10;
+  const bSizes = spanSizes.slice(bStart, bStart + 20);
+  assert.deepEqual(
+    bSizes,
+    expected,
+    `B's rendered sizes must reflect its own cols: 2, not the row's shared rankCols: ${bSizes}`,
+  );
+});
+
+// Findings from code review: two crashes the grid renderer introduced beyond the one already fixed
+// above (double-DIV). Both reproduced against the pre-fix code and confirmed absent at `2e482fa`
+// (which never draws band content at all — it renders blank in the first case, and simply doesn't
+// exist as a code path for the second — so neither crash is possible there).
+
+// `groupColumns` used to be computed unconditionally, before the `ranked.length > 0` gate that
+// decides whether it's even used. With a featured tier, zero ranked tiers, and a wall tier moved
+// into the band via `row:`, `planAt()`'s `split` is false (nothing to share the width with, by its
+// own reasoning) so the featured column claims the whole inner width and `g.rightW` degenerates to
+// 1px — `wallTier` then divides that sliver into columns and gets a negative `avail`. Gating the
+// computation on the same condition its consumer already used to check is the fix; this pins that
+// the fixture renders instead of throwing.
+test("band grid: a `row:`'d wall tier with a featured tier but no ranked tiers does not crash", async () => {
+  const { sheet } = await templateFor("grid-no-ranked-wall-row", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "WallInBand", layout: "wall", items: bulk("w", 50), row: 1 },
+    ],
+  });
+  const html = await sheet();
+  assert.match(html, />Featured</);
+});
+
+// The renderer's own `colsOf` used to read `t.cols ?? g.rankCols` with no clamp, unlike `shape()`'s
+// (`Math.min(Math.max(1, …), Math.max(1, t.items.length))`). Two ways that disagreement broke:
+// a `cols:` bigger than a tier's own item count over-credits that cell's width share (starving its
+// row neighbor's `avail` negative), and an unclamped `cols: 0` makes `rankedTier` build zero
+// columns (`Array.from({ length: 0 }, …)`), silently dropping every item in that tier.
+test("band grid: an over-wide `cols:` beside another cell does not crash", async () => {
+  const { sheet } = await templateFor("grid-cols-overwide", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "Narrow", layout: "ranked", items: bulk("n", 2), row: 1, column: 1, cols: 9 },
+      { name: "Wide", layout: "ranked", items: bulk("c", 20), row: 1, column: 2 },
+    ],
+  });
+  const html = await sheet();
+  for (const item of ["n1", "n2", "c1", "c20"]) assert.ok(html.includes(`>${item}<`), item);
+});
+
+test("band grid: `cols: 0` on a tier beside another does not silently drop its items", async () => {
+  const { sheet } = await templateFor("grid-cols-zero-render", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "ZeroCols", layout: "ranked", items: bulk("z", 6), row: 1, column: 1, cols: 0 },
+      { name: "Other", layout: "ranked", items: bulk("o", 6), row: 1, column: 2 },
+    ],
+  });
+  const html = await sheet();
+  for (const item of ["z1", "z6", "o1", "o6"]) assert.ok(html.includes(`>${item}<`), item);
 });
