@@ -6,6 +6,7 @@
 // The assertions read markup that banzuke.mjs emits (rank cells, tier headers). The template is
 // meant to be edited, so these are checks on the shipped version, not a public API.
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -452,4 +453,37 @@ test("the sheet is pinned to the solved canvas", async () => {
     html.startsWith(`<div style="width:${g.sheetW}px;height:${g.sheetH}px`),
     `root box does not carry the canvas: ${html.slice(0, 140)}`,
   );
+});
+
+test("RANK_COLS auto: the ranked block gains columns as the canvas widens", async () => {
+  const { geometry } = await templateFor("geom-rankcols", SPARSE);
+  assert.equal(geometry().rankCols, 2, "a minimum-width sheet keeps the two-column ranked block");
+  assert.equal(
+    geometry(MEDIUM).rankCols,
+    3,
+    "a wider canvas should split the ranked tiers further",
+  );
+});
+
+test("RANK_COLS auto: hierarchy outranks row width", async () => {
+  // DENSE is wide enough to want four columns, but four would make its ranked rows as tall as
+  // its featured ones. Gappy rows beat a ranking that stops reading by size.
+  const { geometry } = await templateFor("geom-rankcols-hier", SPARSE);
+  const g = geometry(DENSE);
+  assert.equal(g.rankCols, 2);
+  assert.ok(
+    g.unit < g.featRowH,
+    `ranked rows (${g.unit}) must stay shorter than featured ones (${g.featRowH})`,
+  );
+});
+
+test("RANK_COLS: an explicit number overrides the auto split", async () => {
+  const dir = scaffold("geom-rankcols-fixed", DENSE);
+  const file = path.join(dir, "banzuke.mjs");
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8").replace('const RANK_COLS = "auto"', "const RANK_COLS = 3"),
+  );
+  const { geometry } = await import(pathToFileURL(file).href);
+  assert.equal(geometry().rankCols, 3);
 });

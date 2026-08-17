@@ -97,7 +97,8 @@ const TYPE = {
   ranked: { cap: 30, rowFill: 0.63, taper: 0.78, stretch: 1.5 },
 };
 const MIN_RANK_UNIT = 22; // floor for one ranked row, so the right side survives a small featured tier
-const RANK_COLS = 2; // columns per ranked tier (more columns = narrower rows = easier to squash)
+const RANK_COLS = "auto"; // columns per ranked tier. "auto" holds them near RANK_COL_W wide;
+//                           a number pins them (more columns = narrower rows = easier to squash)
 const TIER_WEIGHT = 1.3; // multiplier making higher ranked tiers taller (↑ makes the top stand out)
 const WALL = {
   sizes: [14, 11, 9.5], // wall font sizes (top wall first; the last one repeats if you run out)
