@@ -1089,6 +1089,77 @@ test("band grid: a cell that cannot fill its row caps its type rather than its b
   assert.ok(drawnRowH > featLast, "the row keeps its height; only the type is capped");
 });
 
+// The fallback is the whole of finding 1, and nothing pinned it: reverting it left the suite green.
+// Two datasets, because the rule has two halves. Both have a 26-item featured tier, so the band is
+// sized by 26 featured rows and no split can bring the ranked type under the cap — the bound never
+// clears and the fallback decides. Where narrowing is free it must be taken (a wider split spends
+// the same canvas on taller, emptier rows holding the same capped type); where it would cost canvas
+// it must not be. `return want` fails the first, `return 1` fails the second.
+test("band grid: when narrowing cannot buy the bound it buys density, but never at the canvas's expense", async () => {
+  const band = (right) => ({
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 26), color: "#d62828" },
+      { name: "Left", layout: "ranked", items: bulk("l", 12), row: 1, column: 1 },
+      { name: "Right", layout: "ranked", items: bulk("r", right), row: 1, column: 2 },
+    ],
+  });
+  const { geometry } = await templateFor("grid-fallback", band(12));
+  const [RANK_COL_W, RANK_COLS_MAX] = [300, 4]; // the "tuning knobs" section
+  const want = (g) => Math.min(RANK_COLS_MAX, Math.max(1, Math.round(g.rightW / RANK_COL_W)));
+
+  // Free: both cells hold 12, so even one column each needs no more band than the featured tier
+  // already claims. The narrowest split is therefore the densest at no cost, and must be taken.
+  const free = geometry();
+  assert.ok(free.rankCols < want(free), `the fallback should not keep the width's count`);
+  assert.equal(free.rankCols, 1, "narrowing is free here, so take all of it");
+
+  // Paid: the same 12-item cell now sits beside a 40-item one. One column would give that cell 40
+  // rows, which needs more band than the sheet has — so the fallback has to stop short.
+  const paid = geometry(band(40));
+  assert.ok(paid.rankCols > 1, "narrowing to one column would cost canvas, so it must stop short");
+  assert.equal(paid.cropRisk, false, "and it must not buy density with a croppable sheet");
+  assert.equal(paid.sheetW, free.sheetW, "neither dataset should move the canvas");
+  assert.equal(paid.sheetH, free.sheetH, "neither dataset should move the canvas");
+});
+
+// The bound and the cap are two mechanisms keeping one promise, and the tests above cannot tell
+// them apart: `sheet()` caps unconditionally, so `topRanked <= featLast` holds even with the solver
+// broken. This fixture pins the bound on its own. It clears at a narrower split, so the ranked type
+// lands *strictly under* the featured tier's last row rather than pressed against it — which is
+// only true when the count was chosen for it. Disable the hierarchy loop and the split goes back to
+// the width's own count, where the same promise is kept by the cap alone and the type sits exactly
+// at featLast.
+test("band grid: the bound narrows the split so the type fits under the ceiling, not against it", async () => {
+  const { geometry, sheet } = await templateFor("grid-bound-alone", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 14), color: "#d62828" },
+      { name: "Big", layout: "ranked", items: bulk("g", 40), row: 1, column: 1 },
+      { name: "Small", layout: "ranked", items: bulk("s", 10), row: 1, column: 2 },
+      { name: "Wall", layout: "wall", items: bulk("w", 200) },
+    ],
+  });
+  const g = geometry();
+  const [RANK_COL_W, RANK_COLS_MAX] = [300, 4];
+  const want = Math.min(RANK_COLS_MAX, Math.max(1, Math.round(g.rightW / RANK_COL_W)));
+  assert.ok(
+    g.rankCols < want,
+    `the bound should have narrowed the split (${g.rankCols} of ${want})`,
+  );
+
+  const sizes = spanSizes(await sheet());
+  const featLast = sizes[14];
+  const bigFirst = sizes[1 + 14];
+  assert.ok(
+    bigFirst < featLast,
+    `the narrowed split should type Big under the featured tier's last row, not at it ` +
+      `(${bigFirst}px vs ${featLast}px)`,
+  );
+});
+
 // A tier's own `cols:` reached the height math and the markup but not the column solver, which
 // re-derived every ranked tier's row count from the *shared* count instead. A tier pinned narrow
 // therefore looked to the solver like it had far fewer (so far taller) rows than it really has, and
@@ -1099,15 +1170,16 @@ test("band grid: a tier's own `cols:` is counted by the column solver, not just 
     title: "T",
     unit: "titles",
     tiers: [
-      { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
-      { name: "Pinned", layout: "ranked", items: bulk("p", 16), ...(pin ? { cols: 1 } : {}) },
-      { name: "Other", layout: "ranked", items: bulk("o", 16) },
+      { name: "Featured", layout: "featured", items: bulk("f", 8), color: "#d62828" },
+      { name: "Pinned", layout: "ranked", items: bulk("p", 12), ...(pin ? { cols: 2 } : {}) },
+      { name: "Other", layout: "ranked", items: bulk("o", 12) },
+      { name: "Wall", layout: "wall", items: bulk("w", 200) },
     ],
   });
   const { geometry } = await templateFor("grid-cols-solver", pinned(true));
   const withPin = geometry();
   const noPin = geometry(pinned(false));
-  assert.equal(withPin.bandRowPlan[0].cells[0].rows[0], 16, "`cols: 1` over 16 items is 16 rows");
+  assert.equal(withPin.bandRowPlan[0].cells[0].rows[0], 6, "`cols: 2` over 12 items is 6 rows");
   // Holding one tier to a single column costs the solver nothing — its rows only get shorter — so
   // the rest of the sheet may split wider than it could have without the pin.
   assert.ok(

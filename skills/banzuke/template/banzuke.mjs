@@ -535,10 +535,16 @@ function resolveRankCols(p, bandOf) {
     );
     if (clears) return cols;
   }
-  // Nothing cleared. Narrowing is worth paying for when it buys the bound; when it cannot, the
-  // payment is all there is — a narrower split is a taller band, a taller sheet, and the crop this
-  // whole canvas solve exists to avoid — so take the width the sheet actually asked for and let
-  // the type cap in sheet() keep the hierarchy honest.
+  // Nothing cleared, so every count here draws its top cell at the same capped size and the choice
+  // is no longer about hierarchy at all — it is about how much air sits around that type. Extra
+  // columns mean fewer, taller rows holding the same size text, so the widest split is also the
+  // emptiest. Narrowing is only unaffordable when it costs canvas: a narrower split needs more
+  // band, and past a point that is a taller sheet and the crop this whole solve exists to avoid.
+  // So take the narrowest split the sheet already pays for — same canvas as `want`, tighter rows.
+  const budget = bandOf(shape(p, want));
+  for (let cols = 1; cols < want; cols++) {
+    if (shape(p, cols).bandFloor <= budget) return cols;
+  }
   return want;
 }
 
@@ -745,9 +751,14 @@ export async function sheet() {
               // `resolveRankCols` cannot fix that: the column count scales every cell at once, so
               // splitting until the short cell behaves squeezes the whole sheet (and, past a
               // point, only makes it taller). The bound is applied to the type here instead, per
-              // cell, where the imbalance actually is. Within a cell the ceiling tapers with the
-              // stack's own weights, so a capped cell still reads top-to-bottom.
-              const topWeight = cell.walls ? 0 : Math.max(...cell.weights);
+              // cell, where the imbalance actually is.
+              //
+              // One ceiling for every tier in the stack, not a per-tier share of it: the promise is
+              // only that no ranked title out-types the featured column's last row, which a lower
+              // tier drawn at exactly that size keeps. Tapering the ceiling down the stack as well
+              // compounds with the taper tierSizes already applies inside each tier, and a third
+              // level lands around 7px — illegible, and below the floor MIN_RANK_UNIT exists to
+              // hold. Where the ceiling does not bind, the stack's own weights still taper it.
               const blocks = await Promise.all(
                 cell.stack.map((tier, j) =>
                   cell.walls
@@ -756,7 +767,7 @@ export async function sheet() {
                         tier,
                         startRank: startRank.get(tier),
                         height: HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit),
-                        maxSize: (featLast * cell.weights[j]) / topWeight,
+                        maxSize: featLast,
                         width: cellW,
                         cols: colsOf(tier),
                         isLast: j === cell.stack.length - 1,
