@@ -1,6 +1,6 @@
 {
   "name": "banzuke",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "An agent skill that renders banzuke (tier-ranking sheets) to PNG without a browser. template/ is a complete self-contained project scaffold (lib, package.json and lock included), and the output stays in the user's hands.",
   "type": "module",
