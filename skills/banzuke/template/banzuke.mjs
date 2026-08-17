@@ -136,16 +136,19 @@ const tierHeader = (name, count) =>
     <div style="margin-left:auto;font-size:14px;font-weight:${T.weight}">${count}</div>
   </div>`;
 
-/** One numbered row: spine, running number, title (fitSpan) */
+/** One row: spine, running number, title (fitSpan). No rank means the tier opted out of numbering */
 async function row({ item, rank, size, colW, color, stretch, last }) {
+  const numbered = rank !== undefined;
   const rankSize = Math.max(10, size * 0.5);
-  const rankW = Math.round(6 + 1.4 * rankSize);
-  const avail = colW - SPINE - rankW - 8 - PAD;
+  const rankW = numbered ? Math.round(6 + 1.4 * rankSize) : 0;
+  // Without a number the title starts where the number would have: one PAD off the spine.
+  const gap = numbered ? 8 : PAD;
+  const avail = colW - SPINE - rankW - gap - PAD;
   const span = await fitT(titleOf(item), { size, avail, stretch });
   const bb = last ? "" : `border-bottom:${SEP}px solid ${T.ink};`;
   return `<div style="flex:1;display:flex;align-items:center;min-height:0;overflow:hidden;border-left:${SPINE}px solid ${color};background:${T.bg};${bb}">
-    <div style="width:${rankW}px;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${rank}</div>
-    <div style="flex:1;min-width:0;overflow:hidden;padding:0 ${PAD}px 0 8px;line-height:${LINE}">${span}</div>
+    ${numbered ? `<div style="width:${rankW}px;flex:none;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${rank}</div>` : ""}
+    <div style="flex:1;min-width:0;overflow:hidden;padding:0 ${PAD}px 0 ${gap}px;line-height:${LINE}">${span}</div>
   </div>`;
 }
 
@@ -155,7 +158,7 @@ async function rowColumn({ items, startRank, sizes, colW, color, stretch }) {
     items.map((item, i) =>
       row({
         item,
-        rank: startRank + i,
+        rank: startRank === undefined ? undefined : startRank + i,
         size: sizes[i],
         colW,
         color,
@@ -180,7 +183,7 @@ async function rankedTier({ tier, startRank, height, width, cols: rankCols, isLa
     Array.from({ length: cols }, (_, c) =>
       rowColumn({
         items: tier.items.slice(start(c), start(c + 1)),
-        startRank: startRank + start(c),
+        startRank: startRank === undefined ? undefined : startRank + start(c),
         sizes: sizes.slice(start(c), start(c + 1)),
         colW,
         color,
@@ -198,7 +201,7 @@ async function rankedTier({ tier, startRank, height, width, cols: rankCols, isLa
 }
 
 /** wall tier: an unranked packed wall. Explicit columns + vertical rules (multicol substitute) */
-async function wallTier(tier, size, cols, inner) {
+async function wallTier(tier, size, cols, inner, rule = true) {
   const names = tier.items.map(titleOf);
   const start = colSplit(names.length, cols);
   const gutter = 8;
@@ -216,12 +219,15 @@ async function wallTier(tier, size, cols, inner) {
           return `<div style="height:${rowH}px;padding:1px 0;font-size:${size}px;line-height:${LINE};overflow:hidden">${span}</div>`;
         }),
       );
-      const rule = c > 0 ? `border-left:${SEP}px solid ${T.rule};padding-left:${gutter}px;` : "";
+      const colRule = c > 0 ? `border-left:${SEP}px solid ${T.rule};padding-left:${gutter}px;` : "";
       const pr = c < cols - 1 ? `padding-right:${gutter}px;` : "";
-      return `<div style="flex:1;min-width:0;${rule}${pr}">${items.join("")}</div>`;
+      return `<div style="flex:1;min-width:0;${colRule}${pr}">${items.join("")}</div>`;
     }),
   );
-  return `<div style="border-bottom:${DIV}px solid ${T.ink};padding-bottom:10px">
+  // In the band the enclosing cell already draws the rule underneath, so a wall there must not
+  // draw its own or the two stack up into a double line.
+  const under = rule ? `border-bottom:${DIV}px solid ${T.ink};` : "";
+  return `<div style="${under}padding-bottom:10px">
     ${tierHeader(tier.name, names.length)}
     <div style="height:8px"></div>
     <div style="display:flex;align-items:flex-start;padding:0 ${PAD}px">${columns.join("")}</div>
@@ -620,6 +626,7 @@ export async function sheet() {
   const startRank = new Map();
   let next = 1;
   for (const t of numbered) {
+    if (t.numbers === false) continue; // data.mjs opt-out: laid out by rank, but not numbered
     startRank.set(t, next);
     next += t.items.length;
   }
@@ -653,20 +660,55 @@ export async function sheet() {
     letterSpacing: -0.72,
   });
 
-  // geometry() now plans the band as rows of cells (see bandRowPlan/bandRowHeights) so a
-  // data.mjs `row:`/`column:` can rearrange it, but this renderer still only draws the shape the
-  // sheet always had: one ranked tier per row, so `ranked[i]` and `bandRowHeights[i]` line up.
-  const rankedBlocks = await Promise.all(
-    ranked.map((tier, i) =>
-      rankedTier({
-        tier,
-        startRank: startRank.get(tier),
-        height: g.bandRowHeights[i],
-        width: g.rightW, // the whole inner width when there is no featured column to share it with
-        cols: g.rankCols,
-        isLast: i === ranked.length - 1,
-      }),
-    ),
+  // The band's right side: one box per row, stacked. Within a row the tiers stand side by side,
+  // sharing the width in proportion to how many columns each one asked for — a tier's own `cols:`
+  // if it set one, the row's shared `g.rankCols` otherwise.
+  const groupColumns = await Promise.all(
+    g.bandRowPlan.map(async (r, ri) => {
+      const lastRow = ri === g.bandRowPlan.length - 1;
+      // border-box again: bandRowHeights[ri] already reserves this row's own rule (see derive()),
+      // so the row's declared height stays the full value — only the *content* math below (cell
+      // widths, the ranked unit) works off what the rule leaves behind.
+      const boxH = g.bandRowHeights[ri];
+      const rowH = boxH - (lastRow ? 0 : DIV);
+      const colsOf = (t) => t.cols ?? g.rankCols;
+      const weightOf = (c) => c.stack.reduce((sum, t) => sum + colsOf(t), 0);
+      const totalCols = r.cells.reduce((sum, c) => sum + weightOf(c), 0);
+      let used = 0;
+      const cells = await Promise.all(
+        r.cells.map(async (cell, i) => {
+          const lastCell = i === r.cells.length - 1;
+          const w = lastCell
+            ? g.rightW - used
+            : Math.floor((g.rightW * weightOf(cell)) / totalCols);
+          used += w;
+          const cellRule = lastCell ? "" : `border-right:${DIV}px solid ${T.ink};`;
+          const cellW = w - (lastCell ? 0 : DIV);
+          // A wall stack keeps its own height; a ranked stack divides the row by weight.
+          const unit = cell.walls ? 0 : (rowH - cell.fixed) / cell.weighted;
+          const blocks = await Promise.all(
+            cell.stack.map((tier, j) =>
+              cell.walls
+                ? wallTier(tier, cell.walls[j].size, cell.walls[j].cols, cellW, false)
+                : rankedTier({
+                    tier,
+                    startRank: startRank.get(tier),
+                    height: HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit),
+                    width: cellW,
+                    cols: colsOf(tier),
+                    isLast: j === cell.stack.length - 1,
+                  }),
+            ),
+          );
+          return `<div style="width:${w}px;flex:none;display:flex;flex-direction:column;${cellRule}">${blocks.join("")}</div>`;
+        }),
+      );
+      // A wall row is exactly as tall as its lines, so the slack has to go to a row that can use
+      // it: the last row, whose cells share the band by weight instead of a fixed need.
+      const rowRule = lastRow ? "" : `border-bottom:${DIV}px solid ${T.ink};`;
+      const sizing = `height:${boxH}px;flex:none;${rowRule}`;
+      return `<div style="${sizing}display:flex;min-height:0">${cells.join("")}</div>`;
+    }),
   );
 
   let band = "";
@@ -682,7 +724,7 @@ export async function sheet() {
     const border = ranked.length > 0 ? `border-right:${DIV}px solid ${T.ink};` : "";
     const rightSide =
       ranked.length > 0
-        ? `<div style="width:${g.rightW}px;display:flex;flex-direction:column">${rankedBlocks.join("")}</div>`
+        ? `<div style="width:${g.rightW}px;display:flex;flex-direction:column">${groupColumns.join("")}</div>`
         : "";
     band = `<div style="height:${g.bandH}px;flex:none;display:flex;border-bottom:${DIV}px solid ${T.ink}">
       <div style="width:${g.featW}px;flex:none;display:flex;flex-direction:column;${border}">
@@ -692,7 +734,7 @@ export async function sheet() {
       ${rightSide}
     </div>`;
   } else {
-    band = rankedBlocks.join("");
+    band = groupColumns.join("");
   }
 
   const wallBlocks = await Promise.all(

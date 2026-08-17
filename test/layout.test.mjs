@@ -585,6 +585,45 @@ const GRID = {
   ],
 };
 
+test("band grid: `numbers: false` drops the rank cells and takes no running numbers", async () => {
+  const html = await sheetFor("grid-numbers", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 3), color: "#d62828" },
+      { name: "Quiet", layout: "ranked", items: bulk("q", 4), numbers: false },
+      { name: "Loud", layout: "ranked", items: bulk("l", 3) },
+    ],
+  });
+  // 3 featured then 3 in Loud: the unnumbered tier neither shows nor consumes numbers
+  assertRanks(html, 6);
+  for (const item of ["q1", "q4", "l1"]) assert.ok(html.includes(`>${item}<`), item);
+});
+
+test("band grid: a wall in the band draws no rule of its own", async () => {
+  const html = await sheetFor("grid-rule", GRID);
+  // The enclosing cell already rules underneath; a second one stacks into a double line.
+  assert.equal(
+    html.split('<div style="padding-bottom:10px">').length - 1,
+    1,
+    "the band's wall should render without its own bottom rule",
+  );
+});
+
+test("band grid: side-by-side cells split the width and each fills the row", async () => {
+  const { sheet, geometry } = await templateFor("grid-render", GRID);
+  const g = geometry();
+  const html = await sheet();
+  const widths = [
+    ...html.matchAll(/<div style="width:(\d+)px;flex:none;display:flex;flex-direction:column;/g),
+  ].map((m) => Number(m[1]));
+  assert.ok(widths.length >= 2, "expected a box per cell");
+  assert.ok(
+    Math.abs(widths.slice(-2).reduce((a, b) => a + b, 0) - g.rightW) <= 4,
+    `cells should tile rightW ${g.rightW}, got ${widths.slice(-2)}`,
+  );
+});
+
 test("band grid: `row:` and `column:` build rows of cells of stacks", async () => {
   const { geometry } = await templateFor("grid-shape", GRID);
   const g = geometry();
@@ -667,6 +706,45 @@ test("band grid: with no `row:` anywhere, an earlier tier still reads taller tha
     g.bandRowHeights[0] > g.bandRowHeights[1],
     `the earlier, smaller tier (${g.bandRowHeights[0]}px) should still outsize the later, ` +
       `bigger one (${g.bandRowHeights[1]}px)`,
+  );
+});
+
+// TIER_WEIGHT applies at both levels now: across a row's own position (`shape()`'s row loop) and
+// within a cell's stack (`cellOf`'s weights). A tier that is both the top of its row *and* the top
+// of a `column:` stack draws on both, so three flexible rows (enough for a row weight of TIER_WEIGHT²
+// to appear) with a stack in the middle one is the fixture that would catch either compounding
+// silently dropping back to one level only.
+test("band grid: `row:` and `column:` together, TIER_WEIGHT compounds across rows and within a stack", async () => {
+  const { geometry } = await templateFor("grid-weight-compound", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "Top", layout: "ranked", items: bulk("t", 6), row: 1 },
+      { name: "MidA", layout: "ranked", items: bulk("a", 6), row: 2, column: 1 },
+      { name: "MidB", layout: "ranked", items: bulk("b", 6), row: 2, column: 1 },
+      { name: "Bottom", layout: "ranked", items: bulk("c", 6), row: 3 },
+    ],
+  });
+  const g = geometry();
+  assert.equal(g.bandRowPlan.length, 3, "three flexible band rows: Top, Mid, Bottom");
+  assert.equal(g.bandRowPlan[1].cells.length, 1, "MidA/MidB share a `column:`, so one cell");
+  assert.equal(g.bandRowPlan[1].cells[0].stack.length, 2, "that cell holds both tiers, stacked");
+
+  // Top and Bottom are each a stack of one, so their own within-stack weight is 1 — any height
+  // difference between them is purely the row-level weight this fixture is pinning.
+  const perRowHeight = (rowIndex) => {
+    const row = g.bandRowPlan[rowIndex];
+    const cell = row.cells.find((c) => !c.walls);
+    return ((g.bandRowHeights[rowIndex] - cell.fixed) / cell.weighted) * Math.max(...cell.weights);
+  };
+  const ratio = perRowHeight(0) / perRowHeight(2);
+  // TIER_WEIGHT is 1.3 in this template (the "tuning knobs" section) — three flexible rows put the
+  // top one at TIER_WEIGHT^2 and the bottom at TIER_WEIGHT^0, so their ratio is TIER_WEIGHT².
+  const TIER_WEIGHT = 1.3;
+  assert.ok(
+    Math.abs(ratio - TIER_WEIGHT ** 2) < 0.1,
+    `top:bottom should compound to TIER_WEIGHT² (${(TIER_WEIGHT ** 2).toFixed(2)}), got ${ratio.toFixed(2)}`,
   );
 });
 
