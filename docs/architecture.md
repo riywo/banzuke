@@ -90,6 +90,15 @@ The subtle part, and the source of most layout bugs: `scaleX` changes what is *d
 is *laid out*. A squashed span still occupies its natural width, so any box holding one needs a
 fixed height or it can silently take a second line.
 
+### Solving the canvas before the markup
+
+The template solves its canvas before building markup. `geometry()` is pure integer arithmetic —
+wall column counts, row counts, tier heights, no text measurement and no rendering — so searching
+every candidate width between `MIN_W` and `MAX_W` costs nothing, and the sheet can be pinned to a
+target aspect ratio instead of growing downward with the data. Everything the boxes need (the
+canvas, the band height, the derived featured row height, per-tier ranked heights, the wall plan)
+comes out of one call, which also makes the layout assertable in tests without a render.
+
 ### lib/ at a glance
 
 | module | job |

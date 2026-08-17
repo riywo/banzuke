@@ -122,22 +122,24 @@ matching knob and re-run.
 
 ### 1. Density — is it packed?
 
-A banzuke is supposed to be densely filled. Empty space is a failure.
+A banzuke is supposed to be densely filled. The sheet is pinned to a canvas
+(`ASPECT`, 16:9 by default), so it always *fills* — which means too little data shows up as
+stretched rows and oversized type rather than as blank space at the bottom.
 
-- **Too much space inside rows** → raise `TYPE.*.rowFill`, or squeeze the tier height
-  (`FEAT_ROW_H` ↓ / adjust `TIER_WEIGHT`)
-- **The featured column is half empty** → **this is a data problem, and no knob fixes it.** The
-  top band's height is set by the *ranked* tiers beside it, not by the featured tier, so the only
-  thing that fills the featured column is how many items are in it. Measured on the untouched
-  template (default knobs, three ranked tiers alongside), 1 item fills ~27% of the column, 2 ~44%,
-  3 ~61%, 4 ~78%, 5 ~95% — retuning the knobs moves those numbers, but not the shape of the rule,
-  so **aim for 4–6 featured items**. Raising `FEAT_ROW_H` does not rescue a lone item: the row
-  gets taller but `TYPE.featured.cap` holds the text at its size, so you get one tall, mostly
-  empty box. Promote more titles into the tier, or drop `layout: "featured"` entirely and let #1
-  lead the top ranked tier
+- **Too much space inside rows** → raise `TYPE.*.rowFill`, or shift height between tiers with
+  `TIER_WEIGHT`
+- **The featured column looks stretched, with one or two enormous rows** → **this is a data
+  problem, and no knob fixes it.** The band's height comes from the canvas, and the featured tier
+  divides it into however many rows it has, so a lone item gets the whole band. Aim for **4–6
+  featured items**. `TYPE.featured.cap` holds the text size while the row keeps its height, so a
+  short tier gives you tall, mostly empty boxes — promote more titles, or drop `layout: "featured"`
+  and let #1 lead the top ranked tier
 - **A ranked or wall tier looks stretched** → re-tier in the data: merge it with its neighbour,
   or move its tail into the wall
 - **Wall columns end at ragged heights** → adjust `WALL.em` or the number of items
+- **The rows are cramped and the render warned about the ratio** → the data cannot fit the canvas
+  even at `MAX_W`. Move titles into a wall tier, lower `WALL.sizes`, or raise `FEAT_ROW_MIN` to
+  protect the top at the cost of the walls
 - **Font too thin, sheet looks washed out** → raise `T.weight` (250–900, continuously variable)
 
 ### 2. Alignment — any inconsistent margin / padding?
@@ -188,7 +190,8 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
 
 - Do the title, total count and footer sit at sensible positions and sizes?
 - Are the wall columns too many / too few (2–10 rows per column is a good target)?
-- Any awkward leftover space at the very bottom?
+- Does the sheet read as landscape, close to 16:9? A ratio near 1:1 or taller means the data
+  overflowed even `MAX_W` — see "The canvas" below
 
 ## Tips for fixing things
 
@@ -205,8 +208,9 @@ A banzuke is supposed to be densely filled. Empty space is a failure.
   While fine-tuning you can loop with `--draft` (dpr 1, ~3× faster) appended to the render
   command, but **always do the final check on a normal run** (dpr 2)
 - The main knobs are all in the block at the top: `T` (colors, font, weight) / `TYPE`
-  (cap, rowFill, taper, stretch) / `FEAT_ROW_H`, `TIER_WEIGHT`, `MIN_RANK_UNIT`
-  (height distribution) / `RANK_COLS` / `WALL` (sizes, em, stretch)
+  (cap, rowFill, taper, stretch) / `ASPECT`, `MIN_W`, `MAX_W` (the canvas) / `FEAT_ROW_MIN`,
+  `TIER_WEIGHT`, `MIN_RANK_UNIT` (height distribution) / `RANK_COLS`, `RANK_COL_W`, `FEAT_MAX_W`
+  (how a wide canvas is filled) / `WALL` (sizes, em, stretch)
 - It is a plain script on every runtime, so console.log and the debugger work normally. When you
   suspect the structure, read the generated `banzuke.html`
 - Rebuilding the layout from scratch is fine. Pre-compute the px yourself
@@ -301,6 +305,31 @@ mass-producing candidates for them to pick from:
 - Eyeball them all yourself, cut the weak ones, and show the user **3–6 options** with a
   one-line note each. Delete the rejects and their output once a choice is made
 - When a copy transforms the data, do it non-destructively (`data.tiers.map((t) => ({ ...t, … }))`)
+
+## The canvas — why sheets are 16:9
+
+The sheet is pinned to a target ratio rather than growing downward with the data. Social previews
+(X in particular) **center-crop** anything much taller than landscape, and on a banzuke the first
+thing cropped away is the top of the ranking — the whole point of the sheet.
+
+So `geometry()` in `banzuke.mjs` solves the canvas before any markup is built: it walks candidate
+widths from `MIN_W` to `MAX_W` and takes the narrowest one whose `ASPECT` height holds the data.
+More titles means a *wider* sheet with more wall columns, not a longer one. The top band takes
+whatever the masthead, walls and footer leave over, which is why the featured row height is
+derived rather than set.
+
+- Very dense data can miss the ratio even at `MAX_W`. The sheet then renders at the cap, slightly
+  taller than the target, with the band at its `FEAT_ROW_MIN` floor. A little over is fine —
+  1.7:1 still posts uncropped
+- The render **warns** only when the result is still taller than square, which is genuinely
+  croppable. Take that warning seriously: thin the walls or re-tier
+- Raising `ASPECT` past roughly 1:1 reintroduces the crop on X. Lower it (a wider sheet) freely
+
+A wide canvas is filled by splitting tiers into more columns, not by stretching rows. `RANK_COLS`
+is `"auto"` for that reason — but note that more columns means *taller* rows, since fewer rows
+share the same band. So auto stops short of any split that would let a ranked tier's first title
+out-type the featured tier's last one. Rank has to read by size; a gappy row is the cheaper price.
+Pin `RANK_COLS` to a number when you want to overrule that.
 
 ## Constraints — write for takumi's CSS subset
 
