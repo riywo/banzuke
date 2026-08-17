@@ -630,3 +630,27 @@ test("band grid: with no `row:` anywhere, the band is one tier per row as before
   assert.equal(g.bandRowPlan.length, 2, "two ranked tiers, stacked");
   for (const row of g.bandRowPlan) assert.equal(row.cells.length, 1);
 });
+
+// A row of one tier is a stack of one, so TIER_WEIGHT (which taller-izes an *earlier* tier in the
+// same stack) has nothing to act on unless the row itself carries a weight too — the gap this grid
+// briefly opened: with every ranked tier on its own row, the whole gradient silently disappeared
+// and row height tracked item count instead. Two tiers close enough in size that item count alone
+// would favor the later one is what catches that regression; a lopsided pair would pass either way.
+test("band grid: with no `row:` anywhere, an earlier tier still reads taller than a later, bigger one", async () => {
+  const { geometry } = await templateFor("grid-tier-weight", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "Fewer", layout: "ranked", items: bulk("a", 8) },
+      { name: "More", layout: "ranked", items: bulk("b", 10) },
+    ],
+  });
+  const g = geometry();
+  assert.equal(g.bandRowPlan.length, 2);
+  assert.ok(
+    g.bandRowHeights[0] > g.bandRowHeights[1],
+    `the earlier, smaller tier (${g.bandRowHeights[0]}px) should still outsize the later, ` +
+      `bigger one (${g.bandRowHeights[1]}px)`,
+  );
+});

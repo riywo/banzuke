@@ -372,16 +372,19 @@ function derive(p, bandH) {
   const { avail, featRowH } = bandParts(p, bandH);
   const plan = p.bandRowPlan ?? [];
   const gaps = Math.max(0, plan.length - 1) * DIV;
-  // Rigid rows keep exactly what they asked for; whatever is left over is shared out among the
-  // rows that can actually use it, in proportion to what they asked for.
-  const slack = Math.max(0, avail - p.rigidH - p.shareable - gaps);
-  const grow = (r) => (r.rigid || p.shareable <= 0 ? 0 : (slack * r.need) / p.shareable);
+  // Rigid rows keep exactly what they asked for. What's left is one shared unit, spent by every
+  // flexible row on its own weighted demand — the same single `unit` the sheet always divided its
+  // ranked tiers by, just read per row now that a row can hold more than one tier.
+  const unit =
+    p.weightedDemand > 0 ? Math.max(0, avail - p.fixedH - p.rigidH - gaps) / p.weightedDemand : 0;
   return {
     bandH,
     featRowH,
-    unit: 0,
+    unit,
     bandRowHeights: plan.map(
-      (r, i) => Math.round(r.need + grow(r)) + (i < plan.length - 1 ? DIV : 0),
+      (r, i) =>
+        (r.rigid ? r.need : r.fixed + Math.round(r.demand * r.weight * unit)) +
+        (i < plan.length - 1 ? DIV : 0),
     ),
   };
 }
@@ -410,7 +413,7 @@ function shape(p, cols) {
   };
 
   // Within a row, tiers sharing a `column:` stack inside one cell; the cells stand side by side.
-  const rows = p.bandRows.map((tiers) => {
+  const built = p.bandRows.map((tiers) => {
     const byCol = new Map();
     tiers.forEach((t, i) => {
       const k = t.column ?? `_${i}`;
@@ -418,26 +421,51 @@ function shape(p, cols) {
       byCol.get(k).push(t);
     });
     const cells = [...byCol.values()].map(cellOf);
+    const rigid = cells.every((c) => c.walls);
+    const ranked = cells.filter((c) => !c.walls);
     return {
       tiers,
       cells,
       // A row of nothing but walls cannot use extra height, so it never takes a share of it.
-      rigid: cells.every((c) => c.walls),
+      rigid,
       need: Math.max(...cells.map((c) => c.need)),
+      // What a flexible row draws from the shared unit: its hungriest ranked cell's weighted row
+      // count, and that cell's own header/rule overhead. A wall cell beside a ranked one in the
+      // same row never grows, so it takes no part in either — `need` above already keeps the row
+      // tall enough to hold it regardless.
+      demand: rigid ? 0 : Math.max(...ranked.map((c) => c.weighted)),
+      fixed: rigid ? 0 : Math.max(...ranked.map((c) => c.fixed)),
     };
   });
 
+  // TIER_WEIGHT makes an earlier flexible row taller than a later one — the hierarchy a stacked
+  // cell gives its own tiers, carried across rows too, so a data.mjs with no `row:` at all (every
+  // tier its own row, the sheet's original shape) still tapers top to bottom. Position is counted
+  // over flexible rows only: a rigid row never draws from the shared unit, so it never occupies a
+  // rung of the ladder either.
+  const flexCount = built.filter((r) => !r.rigid).length;
+  let seen = 0;
+  const rows = built.map((r) => {
+    if (r.rigid) return r;
+    const weight = TIER_WEIGHT ** (flexCount - 1 - seen);
+    seen += 1;
+    return { ...r, weight };
+  });
+
   const rigidH = rows.reduce((s, r) => s + (r.rigid ? r.need : 0), 0);
-  const shareable = rows.reduce((s, r) => s + (r.rigid ? 0 : r.need), 0);
+  const fixedH = rows.reduce((s, r) => s + (r.rigid ? 0 : r.fixed), 0);
+  const weightedDemand = rows.reduce((s, r) => s + (r.rigid ? 0 : r.demand * r.weight), 0);
   const bandFloor =
     p.bandRule +
     Math.ceil(
       Math.max(
         p.featured ? HDR_H + p.featRows * FEAT_ROW_MIN : 0,
-        rows.length > 0 ? rigidH + shareable + Math.max(0, rows.length - 1) * DIV : 0,
+        rows.length > 0
+          ? fixedH + rigidH + weightedDemand * MIN_RANK_UNIT + Math.max(0, rows.length - 1) * DIV
+          : 0,
       ),
     );
-  return { rankCols: cols, bandRowPlan: rows, rigidH, shareable, bandFloor };
+  return { rankCols: cols, bandRowPlan: rows, rigidH, fixedH, weightedDemand, bandFloor };
 }
 
 /** Lay the data out against one candidate sheet width and report whether it fits */
