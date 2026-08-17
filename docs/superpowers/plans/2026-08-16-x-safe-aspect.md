@@ -62,12 +62,19 @@ relations rather than these figures, but they are what a correct implementation 
 
 | data | canvas | ratio | rankCols | clamped | type sizes (featured / ranked / wall) |
 |---|---|---|---|---|---|
-| shipped scaffold | 1024×576 | 1.78 | 2 | no | 44→29 / 21→16 / 16→12 / 14, 11 |
-| 75-title fixture | 1456×819 | 1.78 | 2 | no | 30→20 / 19→15 / 14→11 / 14, 11, 9.5 |
-| ~390 titles (DENSE) | 2048×1287 | 1.59 | 2 | yes | 30→20 / 19→15 / 14→11 / 14, 11, 9.5 |
+| shipped scaffold | 1024×576 | 1.78 | 2 | no | 46→31 / 23→18 / 17→13 / 14, 11 |
+| 75-title fixture | 1440×810 | 1.78 | 2 | no | 32→21 / 19→15 / 14→11 / 14, 11, 9.5 |
+| ~390 titles (DENSE) | 2048×1205 | 1.70 | 2 | yes | 30→20 / 19→15 / 14→11 / 14, 11, 9.5 |
 
 Type sizes stay monotonic top-to-bottom in every case, which is the point of the hierarchy bound
 in `resolveRankCols` below.
+
+**Corrected after review (2026-08-17).** The figures above are the measured ones; the first
+implementation produced slightly taller sheets (scaffold 1024×576 but only 554px of content,
+75-title fixture 1456×819, DENSE 2048×1287 at 1.59) because the height budget reserved space for
+two rules that takumi already counts *inside* the heights they are declared on — takumi sizes
+boxes border-box. With the budget corrected the same data needs less canvas, so the sheets are
+shorter and their type comes out a size or two larger.
 
 - [ ] **Step 1: Write the failing tests**
 

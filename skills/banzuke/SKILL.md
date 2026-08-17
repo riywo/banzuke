@@ -209,8 +209,8 @@ stretched rows and oversized type rather than as blank space at the bottom.
   command, but **always do the final check on a normal run** (dpr 2)
 - The main knobs are all in the block at the top: `T` (colors, font, weight) / `TYPE`
   (cap, rowFill, taper, stretch) / `ASPECT`, `MIN_W`, `MAX_W` (the canvas) / `FEAT_ROW_MIN`,
-  `TIER_WEIGHT`, `MIN_RANK_UNIT` (height distribution) / `RANK_COLS`, `RANK_COL_W`, `FEAT_MAX_W`
-  (how a wide canvas is filled) / `WALL` (sizes, em, stretch)
+  `TIER_WEIGHT`, `MIN_RANK_UNIT` (height distribution) / `RANK_COLS`, `RANK_COL_W`,
+  `RANK_COLS_MAX`, `FEAT_MAX_W` (how a wide canvas is filled) / `WALL` (sizes, em, stretch)
 - It is a plain script on every runtime, so console.log and the debugger work normally. When you
   suspect the structure, read the generated `banzuke.html`
 - Rebuilding the layout from scratch is fine. Pre-compute the px yourself
@@ -330,6 +330,7 @@ A wide canvas is filled by splitting tiers into more columns, not by stretching 
 is `"auto"` for that reason — but note that more columns means *taller* rows, since fewer rows
 share the same band. So auto stops short of any split that would let a ranked tier's first title
 out-type the featured tier's last one. Rank has to read by size; a gappy row is the cheaper price.
+On the widest sheets it is `RANK_COLS_MAX` (4) rather than `RANK_COL_W` that stops the split.
 Pin `RANK_COLS` to a number when you want to overrule that.
 
 ## Constraints — write for takumi's CSS subset

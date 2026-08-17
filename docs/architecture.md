@@ -56,8 +56,9 @@ re-tier the data, or move one constant in the tuning-knob block at the top of `b
 re-run. Both files are meant to be edited — rebuilding the layout from scratch is a supported
 outcome, not a hack.
 
-Three tier layouts compose one sheet: `featured` (the big left column), `ranked` (numbered
-two-column blocks on the right) and `wall` (a dense unnumbered block at the bottom).
+Three tier layouts compose one sheet: `featured` (the big left column), `ranked` (numbered blocks
+on the right, split into one to four columns as the canvas widens) and `wall` (a dense unnumbered
+block at the bottom).
 
 ## The render pipeline
 
@@ -92,12 +93,18 @@ fixed height or it can silently take a second line.
 
 ### Solving the canvas before the markup
 
-The template solves its canvas before building markup. `geometry()` is pure integer arithmetic —
-wall column counts, row counts, tier heights, no text measurement and no rendering — so searching
-every candidate width between `MIN_W` and `MAX_W` costs nothing, and the sheet can be pinned to a
-target aspect ratio instead of growing downward with the data. Everything the boxes need (the
-canvas, the band height, the derived featured row height, per-tier ranked heights, the wall plan)
-comes out of one call, which also makes the layout assertable in tests without a render.
+The template solves its canvas before building markup. `geometry()` is pure arithmetic — wall
+column counts, row counts, tier heights, no text measurement and no rendering — so stepping
+`MIN_W` to `MAX_W` by `STEP` (~65 candidate widths at the shipped values) costs nothing, and the
+sheet can be pinned to a target aspect ratio instead of growing downward with the data. Everything
+the boxes need (the canvas, the band height, the derived featured row height, per-tier ranked
+heights, the wall plan) comes out of one call, which also makes the layout assertable in tests
+without a render.
+
+The height budget it computes only balances because takumi sizes boxes **border-box**: a declared
+`height` already contains that box's border and padding, so the rules between the sheet's
+fixed-height sections cost nothing extra, and only the auto-height wall tiers add theirs on top.
+Reserve height for the same rule twice and the sheet renders short of the canvas it is pinned to.
 
 ### lib/ at a glance
 

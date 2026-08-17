@@ -4,12 +4,15 @@
 // positive" throw, so each case asserts the sheet's documented contract rather than its pixels.
 //
 // The assertions read markup that banzuke.mjs emits (rank cells, tier headers). The template is
-// meant to be edited, so these are checks on the shipped version, not a public API.
+// meant to be edited, so these are checks on the shipped version, not a public API. The one
+// exception is the canvas-fill test at the bottom, which has to render: no amount of reading the
+// markup can tell you what the boxes add up to.
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { pngSize, renderPng } from "../skills/banzuke/template/lib/index.mjs";
 import { scaffold } from "./helpers/scaffold.mjs";
 
 /** Copy the template with `data` in place and call its sheet() in-process (no PNG render). */
@@ -466,15 +469,45 @@ test("RANK_COLS auto: the ranked block gains columns as the canvas widens", asyn
 });
 
 test("RANK_COLS auto: hierarchy outranks row width", async () => {
-  // DENSE is wide enough to want four columns, but four would make its ranked rows as tall as
-  // its featured ones. Gappy rows beat a ranking that stops reading by size.
+  // DENSE is wide enough to want four columns, but the wider splits would make its ranked rows
+  // rival its featured ones — gappy rows beat a ranking that stops reading by size. How many
+  // columns that leaves is data- and knob-dependent (and a knob away from changing), so assert
+  // the principle: `unit` is the *weighted* unit, and the top ranked tier's rows are
+  // `unit × rankedWeights[0]`, which is what has to stay under a featured row.
   const { geometry } = await templateFor("geom-rankcols-hier", SPARSE);
   const g = geometry(DENSE);
-  assert.equal(g.rankCols, 2);
+  const topRow = g.unit * Math.max(...g.rankedWeights);
   assert.ok(
-    g.unit < g.featRowH,
-    `ranked rows (${g.unit}) must stay shorter than featured ones (${g.featRowH})`,
+    topRow < g.featRowH,
+    `the top ranked row (${topRow}) must stay shorter than a featured one (${g.featRowH})`,
   );
+});
+
+// The one promise the solver exists to keep: the sheet's boxes add up to the canvas it pins
+// itself to. Strip the root's `height` and takumi auto-fits the sheet to whatever its boxes
+// really come to, so the two numbers can be compared. Reserving height twice for the same rule
+// (takumi is border-box: a declared height already contains the box's border and padding) shows
+// up here as a bare strip of paper under the footer, and nothing else in this file would catch
+// it. Featured shapes only — with no featured tier the last block is flex:1, which collapses to
+// its content once the pinned height is gone, so the comparison has nothing to say.
+test("the sheet's boxes add up to the canvas it is pinned to", async () => {
+  for (const [name, data] of [
+    ["sparse", SPARSE],
+    ["medium", MEDIUM],
+    ["dense", DENSE], // the overflow path, where the band is the floor and the sheet runs tall
+  ]) {
+    const { sheet, geometry } = await templateFor(`fill-${name}`, data);
+    const g = geometry();
+    const html = await sheet();
+    const loose = html.replace(`height:${g.sheetH}px;`, "");
+    assert.notEqual(loose, html, `${name}: the root box did not carry the solved height`);
+    const png = await renderPng(loose, { devicePixelRatio: 1, width: g.sheetW });
+    assert.deepEqual(
+      pngSize(png),
+      { width: g.sheetW, height: g.sheetH },
+      `${name}: the sheet does not fill its ${g.sheetW}×${g.sheetH} canvas`,
+    );
+  }
 });
 
 test("RANK_COLS: an explicit number overrides the auto split", async () => {

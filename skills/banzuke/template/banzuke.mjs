@@ -99,6 +99,9 @@ const TYPE = {
 const MIN_RANK_UNIT = 22; // floor for one ranked row, so the right side survives a small featured tier
 const RANK_COLS = "auto"; // columns per ranked tier. "auto" holds them near RANK_COL_W wide;
 //                           a number pins them (more columns = narrower rows = easier to squash)
+const RANK_COLS_MAX = 4; // ceiling for "auto". At MAX_W the RANK_COL_W split already wants five,
+//                          and a fifth column leaves a row too narrow for its rank cell plus a
+//                          title — so this, not RANK_COL_W, is what binds on the widest sheets.
 const TIER_WEIGHT = 1.3; // multiplier making higher ranked tiers taller (↑ makes the top stand out)
 const WALL = {
   sizes: [14, 11, 9.5], // wall font sizes (top wall first; the last one repeats if you run out)
@@ -247,8 +250,15 @@ function wallCols(n, em, inner) {
 }
 
 // ---- Geometry: solving the canvas ----
-// All of this is integer arithmetic — no text measurement, no rendering — so searching ~64
+// All of this is pure arithmetic — no text measurement, no rendering — so searching ~65
 // candidate widths costs nothing. Everything the sheet's boxes need comes out of one call.
+//
+// The whole height budget below rests on one fact: takumi sizes boxes *border-box*. A declared
+// `height` already contains that box's border and padding — `height:50px;border-bottom:10px`
+// occupies 50px, not 60 — while a box with no `height` grows by them. So a rule you can see
+// between two fixed-height boxes costs nothing extra, and only the auto-height boxes (the wall
+// tiers) have to add their padding and rules in. Reserve height for a border twice and the sheet
+// comes out short of the canvas it is pinned to, leaving a bare strip of paper above the frame.
 
 /** Split the data into the three layout families the sheet is built from */
 function partition(source) {
@@ -275,41 +285,90 @@ function rankedShape(ranked, cols) {
 
 /**
  * The tallest a ranked row may get before the first title of a ranked tier would out-type the
- * last row of the featured one. Derived from the type knobs rather than guessed, so re-tuning
- * `taper` or `rowFill` keeps the bound honest.
+ * last row of the featured one. Derived from the type knobs rather than guessed — including the
+ * caps, which clamp both sides of the comparison, so lowering `TYPE.featured.cap` tightens the
+ * bound and raising `TYPE.ranked.cap` is what makes it bind at all.
  */
-const hierCeiling = (featRowH, weights) =>
-  (featRowH * TYPE.featured.rowFill * TYPE.featured.taper) /
-  (TYPE.ranked.rowFill * Math.max(...weights, 1));
+function hierCeiling(featRowH, weights) {
+  const feat = TYPE.featured;
+  const last = Math.min(feat.cap, featRowH * feat.rowFill) * feat.taper; // the featured tier's smallest row
+  // Ranked type that cannot reach `last` even at its own cap can never out-size it, whatever the
+  // rows do, so there is nothing for the bound to say.
+  if (TYPE.ranked.cap <= last) return Number.POSITIVE_INFINITY;
+  return last / (TYPE.ranked.rowFill * Math.max(...weights, 1));
+}
 
 /**
- * RANK_COLS may be a number, or "auto": as many columns as RANK_COL_W wants, but never so many
- * that the ranked rows grow to rival the featured ones. Splitting a tier into more columns makes
- * each row *taller* (fewer rows share the same band), and a sheet whose rank stops reading by
- * size has lost its whole argument — so hierarchy wins over row width.
+ * RANK_COLS may be a number, or "auto": as many columns as RANK_COL_W wants (up to
+ * RANK_COLS_MAX), but never so many that the ranked rows grow to rival the featured ones.
+ * Splitting a tier into more columns makes each row *taller* (fewer rows share the same band),
+ * and a sheet whose rank stops reading by size has lost its whole argument — so hierarchy wins
+ * over row width.
+ *
+ * `avail` has to be the height the tiers actually get (derive()'s, not the raw bandH): on the
+ * overflow path that is the floor `overflow()` hands out, not the band of the candidate width
+ * that was just rejected.
  */
-function resolveRankCols({ rightW, bandH, featRowH, ranked, rankedFixed }) {
+function resolveRankCols({ rightW, avail, featRowH, ranked, rankedFixed }) {
   if (RANK_COLS !== "auto") return RANK_COLS;
-  const want = Math.min(4, Math.max(1, Math.round(rightW / RANK_COL_W)));
-  if (!featRowH || ranked.length === 0) return want;
+  const want = Math.min(RANK_COLS_MAX, Math.max(1, Math.round(rightW / RANK_COL_W)));
+  // No featured tier, or no band to speak of: hierarchy has no opinion, and reading one out of
+  // negative heights would flip the comparison and collapse the sheet to a single column.
+  if (ranked.length === 0 || featRowH <= 0 || avail <= 0) return want;
   for (let cols = want; cols > 1; cols--) {
     const { weighted, weights } = rankedShape(ranked, cols);
-    if ((bandH - rankedFixed) / weighted <= hierCeiling(featRowH, weights)) return cols;
+    if ((avail - rankedFixed) / weighted <= hierCeiling(featRowH, weights)) return cols;
   }
   return 1;
 }
 
+/**
+ * What a band of `bandH` leaves the tiers, and the featured row height that follows — the two
+ * numbers the column count is decided against, before any tier heights are derived. The band's
+ * own bottom rule lives inside bandH, so the tiers share what is left of it.
+ */
+function bandParts(p, bandH) {
+  const avail = bandH - p.bandRule;
+  return { avail, featRowH: p.featured ? (avail - HDR_H) / p.featRows : 0 };
+}
+
 /** The band-height-dependent half of a plan, split out so the overflow path can redo it */
 function derive(p, bandH) {
-  const unit = p.ranked.length > 0 ? (bandH - p.rankedFixed) / p.weightedRows : 0;
+  const { avail, featRowH } = bandParts(p, bandH);
+  const unit = p.ranked.length > 0 ? (avail - p.rankedFixed) / p.weightedRows : 0;
   return {
     bandH,
     unit,
-    featRowH: p.featured ? (bandH - HDR_H) / p.featRows : 0,
+    featRowH,
     rankedHeights: p.rankedRows.map(
       (r, i) =>
         HDR_H + Math.round(r * p.rankedWeights[i] * unit) + (i < p.ranked.length - 1 ? DIV : 0),
     ),
+  };
+}
+
+/**
+ * The column-count-dependent half of a plan: how the ranked tiers deal out over `cols`, and the
+ * band height below which the sheet stops being legible (featured rows on the left, ranked rows
+ * on the right, whichever needs more). Rounded up to a whole pixel: an overflowing sheet is sized
+ * from this floor, and a fractional canvas height cannot be filled exactly.
+ */
+function shape(p, cols) {
+  const { rows, weights, weighted } = rankedShape(p.ranked, cols);
+  const bandFloor =
+    p.bandRule +
+    Math.ceil(
+      Math.max(
+        p.featured ? HDR_H + p.featRows * FEAT_ROW_MIN : 0,
+        p.ranked.length > 0 ? p.rankedFixed + weighted * MIN_RANK_UNIT : 0,
+      ),
+    );
+  return {
+    rankCols: cols,
+    rankedRows: rows,
+    rankedWeights: weights,
+    weightedRows: weighted,
+    bandFloor,
   };
 }
 
@@ -334,32 +393,15 @@ function planAt(sheetW, { featured, ranked, walls }) {
     const cols = wallCols(tier.items.length, size * WALL.em, inner);
     const rows = Math.ceil(tier.items.length / cols);
     const rowH = Math.round(size * LINE);
-    // header + its rule + the 8px gap + rows (each padded 1px top and bottom) + pad + rule
-    return { tier, size, cols, rows, rowH, height: HDR_H + DIV + 8 + rows * (rowH + 2) + 10 + DIV };
+    // A wall tier is the sheet's one auto-height box, so its padding and bottom rule *do* add on
+    // top: header (its rule already inside HDR_H) + the 8px gap + rows (padding inside rowH) +
+    // the tier's own padding-bottom + its rule.
+    return { tier, size, cols, rows, rowH, height: HDR_H + 8 + rows * rowH + 10 + DIV };
   });
   const wallsH = wallPlan.reduce((sum, w) => sum + w.height, 0);
 
   const featRows = featured?.items.length ?? 0;
   const rankedFixed = ranked.length * HDR_H + Math.max(0, ranked.length - 1) * DIV;
-
-  // The band takes whatever the masthead, the walls and the footer leave. The featured row height
-  // and then the ranked column count both follow from it, in that order — the column count needs
-  // to know how tall a featured row ended up before it can avoid out-growing one.
-  const bandH = innerH - (MAST_H + BW) - wallsH - FOOT_H;
-  const featRowH = featured ? (bandH - HDR_H) / featRows : 0;
-  const rankCols = resolveRankCols({ rightW, bandH, featRowH, ranked, rankedFixed });
-  const {
-    rows: rankedRows,
-    weights: rankedWeights,
-    weighted: weightedRows,
-  } = rankedShape(ranked, rankCols);
-
-  // Both sides of the band have a floor: legible featured rows on the left, MIN_RANK_UNIT on the
-  // right. A candidate width that cannot clear them does not fit.
-  const bandFloor = Math.max(
-    featured ? HDR_H + featRows * FEAT_ROW_MIN : 0,
-    ranked.length > 0 ? rankedFixed + weightedRows * MIN_RANK_UNIT : 0,
-  );
 
   const base = {
     sheetW,
@@ -367,31 +409,66 @@ function planAt(sheetW, { featured, ranked, walls }) {
     inner,
     featW,
     rightW,
-    rankCols,
     wallPlan,
     wallsH,
     featured,
     ranked,
     walls,
     featRows,
-    rankedRows,
-    rankedWeights,
-    weightedRows,
     rankedFixed,
-    bandFloor,
+    // Only the featured layout wraps the band in a box of its own, and that box's bottom rule is
+    // inside the height it is given — so with a featured tier the tiers get DIV less than bandH.
+    bandRule: featured ? DIV : 0,
   };
-  return { ...base, ...derive(base, bandH), fits: bandH >= bandFloor, clamped: false };
+
+  // The band takes whatever the masthead, the walls and the footer leave (the masthead's heavy
+  // bottom rule is inside MAST_H — see the border-box note above). The featured row height and
+  // then the ranked column count both follow from it, in that order — the column count needs to
+  // know how tall a featured row ended up before it can avoid out-growing one.
+  const bandH = innerH - MAST_H - wallsH - FOOT_H;
+  const p = {
+    ...base,
+    ...shape(base, resolveRankCols({ rightW, ...bandParts(base, bandH), ranked, rankedFixed })),
+  };
+
+  // A candidate width that cannot clear the band's legibility floor does not fit.
+  return { ...p, ...derive(p, bandH), fits: bandH >= p.bandFloor, clamped: false };
 }
 
 /**
  * No candidate width fits: keep the widest canvas, give the band exactly its floor and let the
  * sheet run past the target ratio. A sheet a little taller than 16:9 still renders and still
  * escapes the crop; one whose rows are squeezed below the floor is unreadable either way.
+ *
+ * The column count is re-resolved here because the band changes underneath it: the candidate was
+ * rejected precisely because its band was too small, and deciding the split against that band
+ * rules out exactly the wider splits that would have made this sheet shorter. One re-derive
+ * settles it — the new floor moves with the count, but only enough to re-check, not to chase.
  */
 function overflow(p) {
-  const band = derive(p, p.bandFloor);
-  const sheetH = 2 * GROUND + 2 * BW + MAST_H + BW + band.bandH + p.wallsH + FOOT_H;
-  return { ...p, ...band, sheetH, clamped: true };
+  const cols = resolveRankCols({
+    rightW: p.rightW,
+    ...bandParts(p, p.bandFloor),
+    ranked: p.ranked,
+    rankedFixed: p.rankedFixed,
+  });
+  const re = { ...p, ...shape(p, cols) };
+  const band = derive(re, re.bandFloor);
+  const sheetH = 2 * GROUND + 2 * BW + MAST_H + band.bandH + re.wallsH + FOOT_H;
+  return { ...re, ...band, sheetH, clamped: true };
+}
+
+/**
+ * The widths to try, narrowest first. Always ends on exactly MAX_W, whether or not STEP divides
+ * the range — the last candidate is the canvas an overflowing sheet falls back to, and it should
+ * be the widest one allowed rather than wherever the steps happened to stop. That also means a
+ * MIN_W left above MAX_W renders at MAX_W instead of leaving the solver with no plan at all.
+ */
+function candidateWidths() {
+  const widths = [];
+  for (let w = MIN_W; w < MAX_W; w += Math.max(1, STEP)) widths.push(w);
+  widths.push(MAX_W);
+  return widths;
 }
 
 /**
@@ -401,7 +478,7 @@ function overflow(p) {
 export function geometry(source = data) {
   const parts = partition(source);
   let plan;
-  for (let w = MIN_W; w <= MAX_W; w += STEP) {
+  for (const w of candidateWidths()) {
     plan = planAt(w, parts);
     if (plan.fits) return { ...plan, cropRisk: false };
   }
@@ -459,7 +536,7 @@ export async function sheet() {
         tier,
         startRank: startRank.get(tier),
         height: g.rankedHeights[i],
-        width: featured ? g.rightW : g.inner,
+        width: g.rightW, // the whole inner width when there is no featured column to share it with
         cols: g.rankCols,
         isLast: i === ranked.length - 1,
       }),
