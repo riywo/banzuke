@@ -117,10 +117,14 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const ramp = (from, to, n) =>
   Array.from({ length: n }, (_, i) => Math.round(lerp(from, to, n < 2 ? 0 : i / (n - 1))));
 
-/** Derive the per-row font sizes inside a tier from the row height */
-function tierSizes(kind, rowH, n) {
+/**
+ * Derive the per-row font sizes inside a tier from the row height. `max` is a second ceiling
+ * alongside the type knob's own `cap`, for a tier that has more height than its rank has earned
+ * (see rankedTier) — pass Infinity when nothing outranks it.
+ */
+function tierSizes(kind, rowH, n, max = Number.POSITIVE_INFINITY) {
   const { cap, rowFill, taper } = TYPE[kind];
-  const from = Math.min(cap, Math.round(rowH * rowFill));
+  const from = Math.min(cap, max, Math.round(rowH * rowFill));
   return ramp(from, Math.round(from * taper), n);
 }
 
@@ -170,12 +174,21 @@ async function rowColumn({ items, startRank, sizes, colW, color, stretch }) {
   return `<div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">${rows.join("")}</div>`;
 }
 
-/** ranked tier: header + items dealt column-major into `cols` columns */
-async function rankedTier({ tier, startRank, height, width, cols: rankCols, isLast }) {
+/**
+ * ranked tier: header + items dealt column-major into `cols` columns.
+ *
+ * `maxSize` is the largest this tier's first title may be typed, which is not always what its row
+ * height would allow: a tier sharing a band row with a longer one is handed more height per row
+ * than its rank has earned, and no ranked title may out-type the featured column's last. The box
+ * keeps its full height either way — a capped tier spends the difference as leading down all of
+ * its rows, which reads as air, rather than shrinking and leaving a blank strip under itself.
+ * Pass Infinity when there is no featured tier to outrank.
+ */
+async function rankedTier({ tier, startRank, height, maxSize, width, cols: rankCols, isLast }) {
   const n = tier.items.length;
   const cols = Math.min(rankCols, Math.max(1, n));
   const rows = Math.ceil(n / cols); // tallest column, which is what sets the row height
-  const sizes = tierSizes("ranked", (height - HDR_H) / rows, n);
+  const sizes = tierSizes("ranked", (height - HDR_H) / rows, n, maxSize);
   const colW = width / cols;
   const color = tier.color ?? T.accent;
   const start = colSplit(n, cols);
@@ -483,11 +496,16 @@ function shape(p, cols) {
  * split's roomier floor passes it on a band it never gets, which is how a ranked title ends up
  * drawn at twice the size of the featured one above it.
  *
- * And against *every* ranked cell of that band, not one stack. A row hands all of its cells the
- * same height, so the cell with the fewest rows types them biggest — judging one cell (or the band
- * as if it were a single column of tiers, which is all it was before rows and cells) passes a count
- * on the strength of whichever cell happened to be measured, while the one beside it out-types the
- * featured column. Every cell divides its own height by its own rows, so every cell gets asked.
+ * And against every ranked cell that *sets* a row's height, not against the band as one stack.
+ * Each row divides its own height by its own cell's rows, so judging the band as a single column
+ * of tiers (all it was before rows and cells) passes a count on a height no cell is drawn at.
+ *
+ * A cell shorter than the one beside it is deliberately not asked. Its rows are tall because its
+ * neighbor's are, not because the band is generous, and the column count is a sheet-wide lever
+ * that scales every cell together — it cannot pull one cell down without squeezing the rest, and
+ * often cannot pull it down at all. Chasing that here is what drives the count to 1, which is the
+ * narrowest, tallest, most croppable sheet on offer. `sheet()` caps such a cell's type instead;
+ * this bound stays on what a wider or narrower split can genuinely change.
  */
 function resolveRankCols(p, bandOf) {
   if (RANK_COLS !== "auto") return RANK_COLS;
@@ -505,6 +523,9 @@ function resolveRankCols(p, bandOf) {
       r.cells.every((c) => {
         // A wall cell types itself off its own `size:`, so the band's height never sets it.
         if (c.walls) return true;
+        // A cell that does not fill its row is bound by its neighbor rather than by the band, and
+        // is capped at the type instead — see this function's note above.
+        if (c.weighted < r.demand) return true;
         // border-box: a non-last row's declared height already contains the rule under it, so what
         // its cells actually have to type into is what the rule leaves — the same content height
         // the markup divides by, or the bound would judge a height nothing is drawn at.
@@ -514,7 +535,11 @@ function resolveRankCols(p, bandOf) {
     );
     if (clears) return cols;
   }
-  return 1;
+  // Nothing cleared. Narrowing is worth paying for when it buys the bound; when it cannot, the
+  // payment is all there is — a narrower split is a taller band, a taller sheet, and the crop this
+  // whole canvas solve exists to avoid — so take the width the sheet actually asked for and let
+  // the type cap in sheet() keep the hierarchy honest.
+  return want;
 }
 
 /** Lay the data out against one candidate sheet width and report whether it fits */
@@ -679,6 +704,13 @@ export async function sheet() {
   // `rankedTier` actually draws cannot drift apart.
   const colsOf = (t) => tierCols(t, g.rankCols);
 
+  // The featured column's own sizes, needed before the band because the band is typed against
+  // them: its last row is the largest any ranked title is allowed to be. Read from the ramp that
+  // is actually drawn rather than re-derived from the knobs, so the two cannot round apart by the
+  // pixel that turns "equal to" into "bigger than". No featured tier, nothing to outrank.
+  const featSizes = featured ? tierSizes("featured", g.featRowH, g.featRows) : [];
+  const featLast = featured ? featSizes.at(-1) : Number.POSITIVE_INFINITY;
+
   // An empty band still costs `g.bandH`, but `planAt()` gives the featured column the whole width
   // when there is nothing to share it with, leaving `g.rightW` at the 1px it floors at. Skip the
   // right side entirely on that shape rather than let `wallTier` divide a sliver into columns and
@@ -707,6 +739,15 @@ export async function sheet() {
               const cellW = w - (lastCell ? 0 : DIV);
               // A wall stack keeps its own height; a ranked stack divides the row by weight.
               const unit = cell.walls ? 0 : (rowH - cell.fixed) / cell.weighted;
+              // Every cell of a row is handed the same height, so a cell holding fewer rows than
+              // the one beside it gets more height per row than its rank has earned — enough to
+              // out-type the featured column, which is the one thing this sheet may not do.
+              // `resolveRankCols` cannot fix that: the column count scales every cell at once, so
+              // splitting until the short cell behaves squeezes the whole sheet (and, past a
+              // point, only makes it taller). The bound is applied to the type here instead, per
+              // cell, where the imbalance actually is. Within a cell the ceiling tapers with the
+              // stack's own weights, so a capped cell still reads top-to-bottom.
+              const topWeight = cell.walls ? 0 : Math.max(...cell.weights);
               const blocks = await Promise.all(
                 cell.stack.map((tier, j) =>
                   cell.walls
@@ -715,6 +756,7 @@ export async function sheet() {
                         tier,
                         startRank: startRank.get(tier),
                         height: HDR_H + Math.round(cell.rows[j] * cell.weights[j] * unit),
+                        maxSize: (featLast * cell.weights[j]) / topWeight,
                         width: cellW,
                         cols: colsOf(tier),
                         isLast: j === cell.stack.length - 1,
@@ -738,7 +780,7 @@ export async function sheet() {
     const featColumn = await rowColumn({
       items: featured.items,
       startRank: startRank.get(featured),
-      sizes: tierSizes("featured", g.featRowH, g.featRows),
+      sizes: featSizes,
       colW: g.featW - DIV,
       color: featured.color ?? T.accent,
       stretch: TYPE.featured.stretch,

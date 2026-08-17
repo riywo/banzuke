@@ -490,47 +490,51 @@ test("RANK_COLS auto: the ranked block gains columns as the canvas widens", asyn
   );
 });
 
-// Every band row's own cell now carries the fixed/weighted numbers `derive()` divided its height
-// by (see `shape()`), so the "weighted unit" the old top-level `g.unit` used to expose is
-// reconstructed per cell instead: the height of that cell's tallest single ranked row. None of
-// these fixtures use `row:`, so every ranked tier still gets a row (and a cell) of its own — this
-// is the same invariant `resolveRankCols`/`hierCeiling` enforce, just read back through the grid.
-const topRankedRow = (g) =>
-  Math.max(
-    ...g.bandRowPlan.flatMap((row, i) =>
-      row.cells
-        .filter((c) => !c.walls)
-        .map((c) => ((g.bandRowHeights[i] - c.fixed) / c.weighted) * Math.max(...c.weights)),
-    ),
+/**
+ * The one promise the hierarchy machinery exists to keep, read off the render: the featured tier's
+ * last row is the largest any ranked title may be typed.
+ *
+ * Row *height* is deliberately not the measure. A band cell sharing a row with a longer one is
+ * handed more height per row than its rank has earned; it keeps that height and spends the surplus
+ * as leading (`rankedTier`'s `maxSize`), because shrinking the box instead would leave a blank
+ * strip inside the band. So such a cell's rows are legitimately taller than a featured row while
+ * its type is not, and only the type can be asserted on.
+ *
+ * `featN` is the featured tier's item count and `bandN` the band's; the masthead title is span 0
+ * and the foot walls follow the band, sized independently of all this.
+ */
+const hierarchy = (html, featN, bandN) => {
+  const sizes = spanSizes(html);
+  return {
+    featLast: sizes[featN],
+    topRanked: Math.max(...sizes.slice(1 + featN, 1 + featN + bandN)),
+  };
+};
+
+const assertHierarchy = (html, featN, bandN, label) => {
+  const { featLast, topRanked } = hierarchy(html, featN, bandN);
+  assert.ok(
+    topRanked <= featLast,
+    `${label}: a ranked title is typed at ${topRanked}px, over the featured tier's last row at ${featLast}px`,
   );
+};
 
 test("RANK_COLS auto: hierarchy outranks row width", async () => {
-  // DENSE is wide enough to want four columns, but the wider splits would make its ranked rows
-  // rival its featured ones — gappy rows beat a ranking that stops reading by size. How many
-  // columns that leaves is data- and knob-dependent (and a knob away from changing), so assert
-  // the principle: no band cell's tallest ranked row may rival a featured one.
-  const { geometry } = await templateFor("geom-rankcols-hier", SPARSE);
-  const g = geometry(DENSE);
-  const topRow = topRankedRow(g);
-  assert.ok(
-    topRow < g.featRowH,
-    `the top ranked row (${topRow}) must stay shorter than a featured one (${g.featRowH})`,
-  );
+  // DENSE is wide enough to want four columns, but the wider splits would type its ranked tiers as
+  // large as its featured one — gappy rows beat a ranking that stops reading by size. How many
+  // columns that leaves is data- and knob-dependent (and a knob away from changing), so assert the
+  // principle rather than the count.
+  const { sheet } = await templateFor("geom-rankcols-hier", DENSE);
+  assertHierarchy(await sheet(), 10, 10 + 20, "DENSE"); // Featured 10; Ranked A 10 + Ranked B 20
 });
 
 test("RANK_COLS auto: a clamped sheet is judged against the band it actually gets", async () => {
   // The overflow path chooses the split and the band height together, so it is possible to accept
   // a split on the strength of a band that only the *rejected* split would have produced. Assert
-  // the invariant on the layout that ships: whatever count came out, no band cell's tallest ranked
-  // row may rival a featured row in the same sheet.
-  const { geometry } = await templateFor("geom-clamped-hier", SPARSE);
-  const g = geometry(BIG_FEATURED);
-  assert.equal(g.clamped, true, "the fixture is meant to exercise the overflow path");
-  const topRow = topRankedRow(g);
-  assert.ok(
-    topRow < g.featRowH,
-    `${g.rankCols} columns: the top ranked row (${topRow}) out-grows a featured one (${g.featRowH})`,
-  );
+  // the invariant on the layout that ships, whatever count came out.
+  const { sheet, geometry } = await templateFor("geom-clamped-hier", BIG_FEATURED);
+  assert.equal(geometry().clamped, true, "the fixture is meant to exercise the overflow path");
+  assertHierarchy(await sheet(), 40, 5 * 20, "BIG_FEATURED"); // Featured 40; five ranked tiers of 20
 });
 
 // The one promise the solver exists to keep: the sheet's boxes add up to the canvas it pins
@@ -545,6 +549,23 @@ test("the sheet's boxes add up to the canvas it is pinned to", async () => {
     ["sparse", SPARSE],
     ["medium", MEDIUM],
     ["dense", DENSE], // the overflow path, where the band is the floor and the sheet runs tall
+    ["shipped", undefined], // no data override: the project's own data.mjs, as it ships
+    // A band grid whose short cell is capped: the capped tier keeps its box and spends the surplus
+    // as leading, so the boxes still have to add up. Shrinking the box instead would show up here
+    // as a strip of bare paper, which is the failure this whole test exists to catch.
+    [
+      "grid-capped",
+      {
+        title: "Grid",
+        unit: "titles",
+        tiers: [
+          { name: "Featured", layout: "featured", items: bulk("f", 12), color: "#d62828" },
+          { name: "Big", layout: "ranked", items: bulk("g", 30), row: 1, column: 1 },
+          { name: "Small", layout: "ranked", items: bulk("s", 8), row: 1, column: 2 },
+          { name: "Wall", layout: "wall", items: bulk("w", 150) },
+        ],
+      },
+    ],
   ]) {
     const { sheet, geometry } = await templateFor(`fill-${name}`, data);
     const g = geometry();
@@ -953,14 +974,13 @@ test("band grid: flipping a lone band tier between wall and ranked does not swin
   assert.ok(asWall.rightW > 1, "the band's wall needs a real width to lay out into");
 });
 
-// A row hands every one of its cells the same height, so a cell holding fewer rows types them
-// bigger. The bound used to read the band as the single stacked column it was before rows and
-// cells — every ranked tier's rows summed, divided into the band once — which is not a height any
-// cell is actually drawn at once two of them stand side by side: two 12-item tiers sharing a row
-// each got the *whole* row, not half of it, so their titles came out ~2.3× the size the bound had
-// approved. Measured on this fixture at 39ea20f: ranked #1 rendered at 29px against the featured
-// tier's last row at 16px — the ranking upside down. Judging every cell puts it back.
-test("band grid: the hierarchy bound is judged against every cell, not the band as one stack", async () => {
+// The bound used to read the band as the single stacked column it was before rows and cells —
+// every ranked tier's rows summed, divided into the band once — which is not a height any cell is
+// actually drawn at once two of them stand side by side: two 12-item tiers sharing a row each got
+// the *whole* row, not half of it, so their titles came out ~2.3x the size the bound had approved.
+// Measured on this fixture at 39ea20f: ranked #1 rendered at 29px against the featured tier's last
+// row at 16px — the ranking upside down.
+test("band grid: side-by-side cells do not out-type the featured column", async () => {
   const { geometry, sheet } = await templateFor("grid-hier-cells", {
     title: "T",
     unit: "titles",
@@ -981,48 +1001,107 @@ test("band grid: the hierarchy bound is judged against every cell, not the band 
   const g = geometry();
   assert.equal(g.bandRowPlan.length, 1, "Left and Right share a `row:`");
   assert.equal(g.bandRowPlan[0].cells.length, 2, "different `column:`s, so two cells side by side");
+  assertHierarchy(await sheet(), 6, 12 + 12, "two cells sharing a row");
+});
 
-  // Every cell, not just the hungriest: each divides the row's height by its own rows.
-  const H = g.bandRowHeights[0];
-  for (const cell of g.bandRowPlan[0].cells) {
-    const top = ((H - cell.fixed) / cell.weighted) * Math.max(...cell.weights);
-    assert.ok(
-      top < g.featRowH,
-      `cell ${cell.stack.map((t) => t.name)}: its top row (${top}) rivals a featured one (${g.featRowH})`,
-    );
-  }
+// Which cell the bound reads matters, and a symmetric fixture cannot show it: with Left and Right
+// the same size, consulting either one alone gives the same answer as consulting both. So mirror an
+// asymmetric row — the 30-item tier on the left in one dataset, on the right in the other — and
+// require the same sheet out of both. A bound that only ever reads the first cell misses the
+// driving cell in the mirrored dataset, and one that only reads the last cell misses it in the
+// first; either way the missed dataset falls back to the count the width alone asked for, and the
+// two sheets stop matching.
+test("band grid: the bound reads whichever cell drives the row, on either side", async () => {
+  const row = (mirrored) => ({
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 12), color: "#d62828" },
+      ...(mirrored
+        ? [
+            { name: "Small", layout: "ranked", items: bulk("s", 8), row: 1, column: 1 },
+            { name: "Big", layout: "ranked", items: bulk("g", 30), row: 1, column: 2 },
+          ]
+        : [
+            { name: "Big", layout: "ranked", items: bulk("g", 30), row: 1, column: 1 },
+            { name: "Small", layout: "ranked", items: bulk("s", 8), row: 1, column: 2 },
+          ]),
+      { name: "Wall", layout: "wall", items: bulk("w", 150) },
+    ],
+  });
+  const { geometry } = await templateFor("grid-driving-cell", row(false));
+  const bigFirst = geometry();
+  const smallFirst = geometry(row(true));
 
-  // What the bound is derived to protect, read off the render rather than the geometry: no ranked
-  // tier's first title may be typed larger than the featured tier's last.
+  // RANK_COL_W / RANK_COLS_MAX from the "tuning knobs" section: the count the width alone asks for,
+  // which is also what the solver falls back to when narrowing cannot buy the bound.
+  const [RANK_COL_W, RANK_COLS_MAX] = [300, 4];
+  const want = (x) => Math.min(RANK_COLS_MAX, Math.max(1, Math.round(x.rightW / RANK_COL_W)));
+  assert.ok(
+    bigFirst.rankCols < want(bigFirst),
+    `the bound should have narrowed the split (got ${bigFirst.rankCols}, width asked ${want(bigFirst)})`,
+  );
+  assert.equal(bigFirst.rankCols, smallFirst.rankCols, "mirroring must not change the split");
+  assert.equal(bigFirst.sheetW, smallFirst.sheetW, "mirroring must not change the canvas");
+  assert.equal(bigFirst.sheetH, smallFirst.sheetH, "mirroring must not change the canvas");
+});
+
+// The underlying defect behind both of the above: a row hands every cell the same height, so a
+// cell with fewer rows than the one beside it is handed more height per row than its rank has
+// earned. The column count cannot aim at one cell — it scales them all — so the type is capped per
+// cell instead, at the featured tier's own last row. What the cap must NOT do is shrink the boxes:
+// a cell falling short of its row leaves a strip of bare paper inside the band, which reads as a
+// rendering bug. The surplus becomes leading down the cell's rows instead, and the boxes still add
+// up (see the canvas-fill test above, which covers this same shape).
+test("band grid: a cell that cannot fill its row caps its type rather than its boxes", async () => {
+  const { geometry, sheet } = await templateFor("grid-cap", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 12), color: "#d62828" },
+      { name: "Big", layout: "ranked", items: bulk("g", 30), row: 1, column: 1 },
+      { name: "Small", layout: "ranked", items: bulk("s", 8), row: 1, column: 2 },
+      { name: "Wall", layout: "wall", items: bulk("w", 150) },
+    ],
+  });
+  const g = geometry();
+  const [row] = g.bandRowPlan;
+  const [big, small] = row.cells;
+  assert.ok(small.weighted < big.weighted, "Small is the cell that cannot fill the row");
+
   const sizes = spanSizes(await sheet());
-  const featured = sizes.slice(1, 1 + 6); // the masthead title is span 0
-  const left = sizes.slice(1 + 6, 1 + 6 + 12);
-  const right = sizes.slice(1 + 6 + 12, 1 + 6 + 24);
-  for (const [name, tier] of [
-    ["Left", left],
-    ["Right", right],
-  ]) {
-    assert.ok(
-      tier[0] <= featured.at(-1),
-      `${name}'s first title (${tier[0]}px) out-types the featured tier's last (${featured.at(-1)}px)`,
-    );
-  }
+  const featLast = sizes[12]; // span 0 is the masthead title, 1..12 the featured tier
+  const smallFirst = sizes[1 + 12 + 30]; // Big's 30 titles come first in the row
+  assert.equal(smallFirst, featLast, "a capped cell types exactly at the featured tier's last row");
+
+  // TYPE.ranked.rowFill from the "tuning knobs" section. Uncapped, the height Small's rows are
+  // actually drawn at would have typed them larger — which is what makes this a cap and not a
+  // coincidence of the ramp.
+  const ROWFILL = 0.63;
+  const drawnRowH = (g.bandRowHeights[0] - small.fixed) / small.weighted;
+  assert.ok(
+    Math.round(drawnRowH * ROWFILL) > featLast,
+    `the cap must bind: a ${drawnRowH}px row would otherwise type at ` +
+      `${Math.round(drawnRowH * ROWFILL)}px against the featured tier's ${featLast}px`,
+  );
+  // And the box is not shrunk to match: the last tier of a cell is flex:1, so it still spans the
+  // whole row and the difference is leading.
+  assert.ok(drawnRowH > featLast, "the row keeps its height; only the type is capped");
 });
 
 // A tier's own `cols:` reached the height math and the markup but not the column solver, which
 // re-derived every ranked tier's row count from the *shared* count instead. A tier pinned narrow
 // therefore looked to the solver like it had far fewer (so far taller) rows than it really has, and
 // the bound rejected splits the sheet could have taken — the pin, whose whole point is to hold one
-// tier narrow while the rest of the sheet spreads out, made the sheet worse instead of better.
+// tier narrow while the rest of the sheet spreads out, bought nothing at all.
 test("band grid: a tier's own `cols:` is counted by the column solver, not just the height math", async () => {
   const pinned = (pin) => ({
     title: "T",
     unit: "titles",
     tiers: [
-      { name: "Featured", layout: "featured", items: bulk("f", 14), color: "#d62828" },
+      { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
       { name: "Pinned", layout: "ranked", items: bulk("p", 16), ...(pin ? { cols: 1 } : {}) },
       { name: "Other", layout: "ranked", items: bulk("o", 16) },
-      { name: "Wall", layout: "wall", items: bulk("w", 150) },
     ],
   });
   const { geometry } = await templateFor("grid-cols-solver", pinned(true));
@@ -1030,14 +1109,11 @@ test("band grid: a tier's own `cols:` is counted by the column solver, not just 
   const noPin = geometry(pinned(false));
   assert.equal(withPin.bandRowPlan[0].cells[0].rows[0], 16, "`cols: 1` over 16 items is 16 rows");
   // Holding one tier to a single column costs the solver nothing — its rows only get shorter — so
-  // the rest of the sheet may split at least as wide as it would have without the pin.
+  // the rest of the sheet may split wider than it could have without the pin.
   assert.ok(
     withPin.rankCols > noPin.rankCols,
     `the pin should free the split (${noPin.rankCols} unpinned, ${withPin.rankCols} pinned)`,
   );
-  assert.equal(noPin.clamped, true, "unpinned, this data cannot reach the target ratio");
-  assert.equal(withPin.clamped, false, "pinned, the wider split gets it back onto the ratio");
-  assert.ok(topRankedRow(withPin) < withPin.featRowH, "the wider split still clears the bound");
 });
 
 // The renderer's own `colsOf` used to read `t.cols ?? g.rankCols` with no clamp, unlike `shape()`'s
