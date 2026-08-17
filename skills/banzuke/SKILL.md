@@ -139,7 +139,7 @@ stretched rows and oversized type rather than as blank space at the bottom.
 - **Wall columns end at ragged heights** → adjust `WALL.em` or the number of items
 - **The rows are cramped and the render warned about the ratio** → the data cannot fit the canvas
   even at `MAX_W`. Move titles into a wall tier, lower `WALL.sizes`, or raise `FEAT_ROW_MIN` to
-  protect the top at the cost of the walls
+  protect the top band's rows at the cost of a taller sheet
 - **Font too thin, sheet looks washed out** → raise `T.weight` (250–900, continuously variable)
 
 ### 2. Alignment — any inconsistent margin / padding?
@@ -319,11 +319,12 @@ whatever the masthead, walls and footer leave over, which is why the featured ro
 derived rather than set.
 
 - Very dense data can miss the ratio even at `MAX_W`. The sheet then renders at the cap, slightly
-  taller than the target, with the band at its `FEAT_ROW_MIN` floor. A little over is fine —
-  1.7:1 still posts uncropped
+  taller than the target, with the band at whichever of its two floors binds. A little over is
+  fine — 1.7:1 still posts uncropped
 - The render **warns** only when the result is still taller than square, which is genuinely
   croppable. Take that warning seriously: thin the walls or re-tier
-- Raising `ASPECT` past roughly 1:1 reintroduces the crop on X. Lower it (a wider sheet) freely
+- `ASPECT` is width ÷ height, so **lowering** it makes the sheet taller and brings the crop back:
+  below about 1:1 you are croppable again. Raising it — a wider, shorter sheet — is always safe
 
 A wide canvas is filled by splitting tiers into more columns, not by stretching rows. `RANK_COLS`
 is `"auto"` for that reason — but note that more columns means *taller* rows, since fewer rows

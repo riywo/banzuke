@@ -890,7 +890,8 @@ derived rather than set.
   1.7:1 still posts uncropped
 - The render **warns** only when the result is still taller than square, which is genuinely
   croppable. Take that warning seriously: thin the walls or re-tier
-- Raising `ASPECT` past roughly 1:1 reintroduces the crop on X. Lower it (a wider sheet) freely
+- `ASPECT` is width ÷ height, so **lowering** it makes the sheet taller and brings the crop back:
+  below about 1:1 you are croppable again. Raising it — a wider, shorter sheet — is always safe
 
 A wide canvas is filled by splitting tiers into more columns, not by stretching rows. `RANK_COLS`
 is `"auto"` for that reason — but note that more columns means *taller* rows, since fewer rows
