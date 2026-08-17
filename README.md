@@ -1,8 +1,13 @@
-# banzuke
+# banzuke 番付
 
 An Agent Skill that generates and updates banzuke (tier-list ranking) PNG sheets.
 Just tell your agent "I want to make a banzuke" and it runs the whole loop:
 edit the data → render → eyeball → fine-tune.
+
+> **番付** (*banzuke*) is the ranking sheet of Japanese sumo: every wrestler for the coming
+> tournament printed on a single page, the top ranks in the largest type and each tier below
+> them smaller, east and west facing off across the sheet. Japan has borrowed the format for
+> centuries to rank anything at all — and so does this skill.
 
 Same data, any theme and layout you like (Bauhaus newsprint / broadsheet gazette / sumo banzuke):
 
@@ -50,3 +55,9 @@ lists the agents that support Agent Skills and links to each one's setup docs.
 > Needs node (>=22), bun (>=1.2) or deno (>=2) wherever it runs — the scaffold ships a lockfile
 > for each, and CI renders a sheet on all three. If none is installed, the agent will walk you
 > through it.
+
+## How it works
+
+Curious what happens between your request and the rendered PNG?
+[docs/architecture.md](docs/architecture.md) walks through the pieces — none of it is needed to
+use the skill.
