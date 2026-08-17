@@ -106,6 +106,28 @@ The height budget it computes only balances because takumi sizes boxes **border-
 fixed-height sections cost nothing extra, and only the auto-height wall tiers add theirs on top.
 Reserve height for the same rule twice and the sheet renders short of the canvas it is pinned to.
 
+### The band is rows of cells of stacks
+
+The top band — everything beside the featured column — is three levels deep, all driven by
+`row:`/`column:` in data.mjs. A **row** is one or more tiers that share a `row:` value (a tier
+with none is its own row, the original one-tier-per-row shape). Within a row, tiers that also
+share a `column:` **stack** on top of each other into one **cell**; different columns become
+cells standing side by side. A row is as tall as its hungriest cell — pairing a short tier with a
+tall one in the same row costs the short one nothing.
+
+A cell built entirely from wall tiers is **rigid**: its height is exactly the sum of its lines,
+computed once from its own `size:` and item count, and it never draws from the row's shared
+height. A ranked cell is the opposite — it always stretches to fill whatever the row gives it, so
+it can never be short (that is why `--report`'s `slack` only ever finds it on a wall cell). What a
+ranked cell *can* be is starved: capped by `TYPE.ranked.cap` or by the featured tier's last row,
+it can fill a tall box with small type and leave most of it as air, which reads full by height and
+bare by ink — `--report`'s `fill` is what catches that, not `slack`.
+
+`--report` does not re-derive any of this independently. `bandCells()` walks `geometry()`'s
+already-solved plan the same way `sheet()`'s `groupColumns` draws it — same row heights, same
+per-cell unit, same `tierSizes()` call — so the numbers it prints describe the markup that would
+actually render, not a parallel model of it that could drift out of sync.
+
 ### lib/ at a glance
 
 | module | job |

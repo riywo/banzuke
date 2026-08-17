@@ -193,6 +193,53 @@ stretched rows and oversized type rather than as blank space at the bottom.
 - Does the sheet read as landscape, close to 16:9? A ratio near 1:1 or taller means the data
   overflowed even `MAX_W` — see "The canvas" below
 
+## Exploring layouts — measure, don't squint
+
+The band's arrangement is the biggest lever on a dense sheet, and it is a data edit, not a
+rewrite: `row:` puts tiers side by side, `column:` stacks them inside one cell, `cols:` splits a
+tier into more columns, and a `layout: "wall"` tier carrying a `row:` moves into the band with the
+wall's own packing — no rules between rows, no per-row floor, one line per item.
+
+So when a sheet is dense enough to be interesting, **do not polish the first arrangement**.
+Produce three to five that differ *structurally* — which tiers share a row, which layout a long
+tier uses, how many columns it deals into — score each with `node banzuke.mjs --report`, then
+open the winner as an image and walk the checklist above. `--report` prints, in order:
+
+- **canvas / ratio / clamped / cropRisk** — the solved size, and whether the data missed the
+  target ratio (`clamped`) or came out genuinely croppable (`cropRisk`)
+- **coverage** — ink area over sheet area. The answer to "is this denser?", and not something the
+  eye can judge from a thumbnail
+- **ladder** — every tier's first→last type size, top to bottom in draw order, marked `!>` where
+  a rung types bigger than the one above it — the inversion the hierarchy bound exists to prevent
+- **slack** — a band cell whose content falls short of its row. Only a wall cell in the band can
+  have slack; a ranked cell always stretches to fill its row, so it never does
+- **starved** — a cell whose drawn type fills less than 30% of its row's line box: numerically
+  full, visually bare paper. Comes with a remedy: if the tier's own `cols:` is still above 1, pin
+  it lower in data.mjs to buy shorter rows at the same capped type; if it is already 1, the cap
+  itself (`TYPE.ranked.cap`, or the featured tier's last row) is what's holding the type down, and
+  no `cols:` change touches that
+- **squeeze** — how many titles are drawn narrower than their natural width (`scaleX < 1`), one
+  step from wrapping and getting clipped
+
+Levers worth knowing before you start guessing:
+
+- **A long tier is cheap as a band wall and expensive as ranked.** A ranked row can't go below
+  `MIN_RANK_UNIT`, so 96 titles in a single ranked column cost over 2000px against roughly 600px
+  for the same 96 as a `layout: "wall"` tier carrying a `row:`. Promoting a long tail tier into
+  the band is usually only affordable as a wall
+- **Compressing the biggest tiers does not raise density.** Most of the characters live there, so
+  shrinking them lowers the average even as it frees height. Measured on a 388-title sheet at a
+  fixed width: coverage went from 27.8% to 25.5%
+- **The solver takes the narrowest fitting width**, so freeing height shrinks the whole sheet
+  rather than handing the band more room. Pin `MIN_W` to `MAX_W` when the freed space should go
+  to the band instead
+- **Row height is no longer a proxy for type size.** Ranked type is capped per cell, so a tall
+  row can hold small type on purpose — read `--report`'s `fill`, not the row, to see if a cell is
+  actually starved. Pinning `cols:` on the starved tier is free where it works: one branch
+  measurement went from 14.4% to 28.8% fill at the same 1728×972 canvas
+- Coverage compares candidates *on the same data*. It is not a score to chase in the abstract — a
+  sheet of long titles will always read denser than one of short ones
+
 ## Tips for fixing things
 
 ### Data side (data.mjs) — suspect this first
@@ -325,6 +372,11 @@ derived rather than set.
   croppable. Take that warning seriously: thin the walls or re-tier
 - `ASPECT` is width ÷ height, so **lowering** it makes the sheet taller and brings the crop back:
   below about 1:1 you are croppable again. Raising it — a wider, shorter sheet — is always safe
+- takumi refuses to render above 2^24 total device pixels: 4096×4096 works, 4096×4097 fails with
+  an opaque "Invalid viewport dimensions". `MAX_W` (2048) at the default dpr 2 already sits at
+  that width ceiling, so a sheet pushed tall enough to be `cropRisk` can reach the same ceiling on
+  height and error outright rather than just render croppable. `--draft` (dpr 1) sidesteps it for
+  the tuning loop; a real fix is the usual one — thin the data or raise `ASPECT`
 
 A wide canvas is filled by splitting tiers into more columns, not by stretching rows. `RANK_COLS`
 is `"auto"` for that reason — but note that more columns means *taller* rows, since fewer rows
