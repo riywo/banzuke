@@ -1247,6 +1247,36 @@ test("--report: coverage rises when the same data is set larger", async () => {
   );
 });
 
+// The regex report() reads spans through requires the transform group literally, but fitSpan only
+// emits `transform:scaleX(…)` when the scale isn't 1 — the common case for text that fits without
+// squashing or stretching, the masthead title included. A regex that required the group therefore
+// silently dropped exactly that span's ink on every sheet (measured: SPARSE undercounted coverage by
+// 18.3%, always losing the title). Pinning "matched == present" rather than a coverage number means
+// a future change to fitSpan's own output can't quietly reopen the gap without this failing, whatever
+// the coverage math around it does.
+test("--report: coverage accounts for every fitSpan, not just the squeezed or stretched ones", async () => {
+  // Mirrors banzuke.mjs's own SPAN regex (with the optional transform group the fix restores).
+  const SPAN =
+    /<span style="[^"]*?font-size:([\d.]+)px;font-weight:(\d+);font-family:'([^']+)';letter-spacing:([-\d.]+)px;(?:transform:scaleX\(([\d.]+)\);)?">([^<]*)<\/span>/g;
+  for (const [name, data] of [
+    ["shipped", undefined],
+    ["grid", GRID],
+    ["bigFeatured", BIG_FEATURED],
+    ["sparse", SPARSE],
+    ["dense", DENSE],
+  ]) {
+    const { sheet } = await templateFor(`report-span-count-${name}`, data);
+    const html = await sheet();
+    const spanTags = [...html.matchAll(/<span /g)].length;
+    const spanMatches = [...html.matchAll(SPAN)].length;
+    assert.equal(
+      spanMatches,
+      spanTags,
+      `${name}: SPAN matched ${spanMatches} of ${spanTags} <span> elements in the sheet`,
+    );
+  }
+});
+
 // A cell can be full by height and still mostly bare paper by type: a small tier sharing a row with
 // a much bigger one is handed that bigger tier's row height, but its own type still caps out at the
 // featured tier's last row. `slack` (got vs a cell's own MIN_RANK_UNIT-floor need) does not catch
@@ -1290,4 +1320,35 @@ test("--report: a cell starved by a bigger neighbor reads low in fill (not slack
     `pinning cols: on the starved tier should raise its fill (${smallBefore.fill} -> ${smallAfter.fill})`,
   );
   assert.deepEqual(before.canvas, after.canvas, "the pin must not move the canvas");
+
+  // `cols` is what tells a fixable starved cell from one that pinning can't touch: unpinned, Small
+  // still has rows to give up (cols > 1); pinned to the floor, it has none left.
+  assert.ok(smallBefore.cols > 1, "unpinned, Small should have a column count above the floor");
+  assert.equal(smallAfter.cols, 1, "pinned, Small's own column count is exactly the floor");
+});
+
+// The starved fixture above is fixable because Small shares its row with a bigger neighbor (Big),
+// which is what leaves Small columns to give up. A lone tier under a big featured column can be
+// starved the same way in `fill` while having no such neighbor: `rankCols` already lands on 1 (the
+// canvas has nowhere else to spend width on one small tier), so its own `cols` is already the floor
+// and pinning it would be a no-op. The cause there is TYPE.ranked.cap capping the type below what
+// even this tier's modest row count would draw — a different lever than the shared-row case.
+test("--report: a lone starved tier with no neighbor to blame reports cols: 1, not a pinnable count", async () => {
+  const { report } = await templateFor("report-starved-lone", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 26), color: "#d62828" },
+      { name: "Lone", layout: "ranked", items: bulk("s", 12) },
+    ],
+  });
+  const r = await report();
+  const lone = r.slack.find((c) => c.name === "Lone");
+  assert.ok(lone, "expected a Lone cell in the report");
+  assert.ok(lone.fill < 0.3, `expected Lone to read as starved, got fill ${lone.fill}`);
+  assert.equal(
+    lone.cols,
+    1,
+    "with no neighbor to share the row, Lone's own split should be at the floor",
+  );
 });

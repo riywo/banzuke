@@ -667,8 +667,12 @@ export function geometry(source = data) {
 // cells are spending their box on air instead of type. Compare two candidate data.mjs edits by
 // this, not by squinting at two PNGs.
 
+// The transform group is optional: fitSpan (lib/fit-span.mjs) only emits `transform:scaleX(…)`
+// when the scale isn't 1 — the common case for text that fits without shrinking or stretching, the
+// masthead title included — so a regex that required it silently skipped that span's ink. Report
+// it as unscaled (default 1) rather than drop it.
 const SPAN =
-  /<span style="[^"]*?font-size:([\d.]+)px;font-weight:(\d+);font-family:'([^']+)';letter-spacing:([-\d.]+)px;transform:scaleX\(([\d.]+)\);">([^<]*)<\/span>/g;
+  /<span style="[^"]*?font-size:([\d.]+)px;font-weight:(\d+);font-family:'([^']+)';letter-spacing:([-\d.]+)px;(?:transform:scaleX\(([\d.]+)\);)?">([^<]*)<\/span>/g;
 
 /** The featured column's own ramp, needed by both the ladder and the per-cell cap below it. */
 const featuredRamp = (g) => (g.featured ? tierSizes("featured", g.featRowH, g.featRows) : null);
@@ -703,8 +707,18 @@ function bandCells(g) {
         const rowBoxH = (height - HDR_H) / cell.rows[j];
         const sizes = tierSizes("ranked", rowBoxH, tier.items.length, featLast);
         // The line box a row's text actually draws, over the box the row is drawn in — see
-        // report()'s doc comment for why this, and not slack, is what finds a starved cell.
-        return { tier, from: sizes[0], to: sizes.at(-1), fill: (sizes[0] * LINE) / rowBoxH };
+        // report()'s doc comment for why this, and not slack, is what finds a starved cell. `cols`
+        // rides along so slackOf can tell whether pinning it lower is a real lever for this tier or
+        // a no-op (see the doc comment there): a tier already at its floor of 1 has no more rows to
+        // gain by pinning, so a box that is still generous there is TYPE.ranked.cap's doing, not a
+        // neighbour's.
+        return {
+          tier,
+          from: sizes[0],
+          to: sizes.at(-1),
+          fill: (sizes[0] * LINE) / rowBoxH,
+          cols: tierCols(tier, g.rankCols),
+        };
       });
       return { cell, got: rowH, tiers };
     });
@@ -736,19 +750,27 @@ function ladderOf(g) {
  * drawn line box over the row box, from bandCells — is what catches it instead: a small tier handed
  * a big neighbour's row height still types no larger than its cap allows, leaving most of that
  * height as leading. In the swept family behind this task, 142 of 148 such cells sat under 0.3 fill.
- * Pinning `cols:` on the starved tier is the free fix — it raises the tier's own row count, which
- * shrinks its row box without touching the row height its neighbour set (so the split and the
- * canvas do not move).
+ *
+ * `cols` (of the tier with the worst fill, ties broken toward the first) is what tells the two
+ * starved causes apart, because the fix only exists for one of them. When that tier's own resolved
+ * column count is above 1, pinning it lower buys real rows — the row's height is fixed by something
+ * else in the row (a taller neighbour, most often), so more rows means a shorter box per row, same
+ * capped type, higher fill; that is the free remedy this task is named for. When it is already 1,
+ * every item already has its own row and there is no lower to pin — the box is generous because
+ * `TYPE.ranked.cap` (or the featured tier's last row) caps the type below what even this cell's own
+ * modest row count would otherwise draw, and no `cols:` change touches that.
  */
 function slackOf(g) {
   return bandCells(g).map(({ cell, got, tiers }) => {
     const need = cell.walls ? cell.need : got;
+    const worst = cell.walls ? null : tiers.reduce((a, b) => (b.fill < a.fill ? b : a));
     return {
       name: cell.stack.map((t) => t.name).join(" + "),
       need,
       got,
       slack: got - need,
-      fill: cell.walls ? null : Math.min(...tiers.map((t) => t.fill)),
+      fill: worst?.fill ?? null,
+      cols: worst?.cols ?? null,
     };
   });
 }
@@ -776,8 +798,11 @@ export async function report() {
       family,
       letterSpacing: Number(ls),
     });
-    ink += w * Number(scale) * Number(size);
-    if (Number(scale) < 1) squeeze += 1;
+    // scale is undefined when the span carried no transform at all, i.e. it drew at its natural
+    // (unsquashed, unstretched) width — scale 1, not the NaN `Number(undefined)` would give.
+    const s = scale === undefined ? 1 : Number(scale);
+    ink += w * s * Number(size);
+    if (s < 1) squeeze += 1;
   }
   return {
     canvas: [g.sheetW, g.sheetH],
@@ -1014,9 +1039,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       );
     }
     for (const cell of r.slack.filter((c) => c.fill !== null && c.fill < STARVED_FILL)) {
+      // Two different causes read the same in fill, and only one has a free fix (see slackOf's doc
+      // comment): a tier still above cols: 1 can be pinned lower to buy more, shorter rows; one
+      // already at 1 has no rows left to gain, so the box is generous because TYPE.ranked.cap (or
+      // the featured tier's last row) caps the type, not because a neighbour set the row height.
+      const remedy =
+        cell.cols > 1
+          ? "pin cols: 1 on it in data.mjs to shrink its own row box without moving the canvas"
+          : "already at cols: 1, so there is no lower to pin — its box is generous because " +
+            "TYPE.ranked.cap (or the featured tier's last row) caps the type, not a neighbour; " +
+            "raising that cap is the lever, not cols:";
       console.log(
-        `starved: "${cell.name}" types at ${(cell.fill * 100).toFixed(1)}% of its row's line box ` +
-          `— pin cols: on it in data.mjs to shrink its own row box without moving the canvas`,
+        `starved: "${cell.name}" types at ${(cell.fill * 100).toFixed(1)}% of its row's line box — ${remedy}`,
       );
     }
     console.log(`squeeze: ${r.squeeze} title(s) drawn narrower than their natural width`);
