@@ -220,7 +220,7 @@ test("a sheet with no featured and no ranked tier still fills the canvas", async
     // space, or a fixed-height box there leaves the reserve unrendered.
     assert.match(
       html,
-      /<div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0">/,
+      /<div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;min-height:0">/,
       `expected a flex box able to absorb the band height for ${JSON.stringify(data.tiers.length)} wall tier(s)`,
     );
   }

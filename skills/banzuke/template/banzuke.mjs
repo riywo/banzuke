@@ -497,12 +497,14 @@ export async function sheet() {
 
   // With neither a featured nor a ranked tier, nothing above claims g.bandH — band is "". On a
   // canvas pinned to a fixed height that would otherwise show up as a blank stripe below the
-  // walls, stranding the footer partway up the sheet instead of at the bottom. Let the walls (or,
-  // for a wholly empty sheet, nothing at all) grow to fill that space and center in it instead, so
-  // the leftover reads as intentional breathing room rather than a layout bug.
+  // walls, stranding the footer partway up the sheet instead of at the bottom. Give the walls
+  // flex:1 so they claim it instead, with the leftover spread *between* them via space-between:
+  // the first wall stays flush under the masthead — top-anchored like every other tier on the
+  // sheet — the last one sits flush against the footer, and the gap collects where there's more
+  // than one wall tier to put it between, rather than floating the whole block in the middle.
   const wallsBlock =
     numbered.length === 0
-      ? `<div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0">${wallBlocks.join("")}</div>`
+      ? `<div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;min-height:0">${wallBlocks.join("")}</div>`
       : wallBlocks.join("");
 
   return `<div style="width:${g.sheetW}px;height:${g.sheetH}px;display:flex;background:${T.ground};padding:${GROUND}px;font-family:'${T.font}';color:${T.ink}">
