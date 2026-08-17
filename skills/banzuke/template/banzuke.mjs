@@ -543,6 +543,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   console.log(
     `${out.width}×${out.height} px (${ratio}:1), ${out.ms}ms → ${out.path}${draft ? " (draft)" : ""}`,
   );
+  // Overflowing the target ratio a little is fine — 1.7:1 still posts uncropped. Warn only once
+  // the sheet is taller than square, which is the shape social previews cut the top off.
+  if (g.cropRisk) {
+    console.warn(
+      `The sheet is ${ratio}:1, taller than the ${SAFE_ASPECT}:1 social previews crop to, and it\n` +
+        "cannot get shorter at the maximum width. Move titles into a wall tier, or lower\n" +
+        "WALL.sizes, and re-run.",
+    );
+  }
   // The rendering half of the job is the easy half. This line is the reminder that the sheet has
   // not been checked yet, printed where whoever ran it is already looking — a note in the docs
   // loses to a tool result every time.
