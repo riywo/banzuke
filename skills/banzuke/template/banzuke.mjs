@@ -56,7 +56,6 @@ const T = {
 };
 
 // Dimensions (px). Rules come in three weights: outer frame BW > section DIV > row SEP
-const FRAME = 1024; // width of the sheet itself
 const GROUND = 24; // outer margin
 const BW = 8; // outer frame
 const SPINE = 8; // left spine of a row
@@ -97,8 +96,6 @@ const TYPE = {
   featured: { cap: 46, rowFill: 0.78, taper: 0.67, stretch: 1.5 },
   ranked: { cap: 30, rowFill: 0.63, taper: 0.78, stretch: 1.5 },
 };
-const FEAT_ROW_H = 58.8; // height of one featured row. Sets the height of the whole top band
-const LONE_ROW_H = 44; // row height given to the top ranked tier when there is no featured tier
 const MIN_RANK_UNIT = 22; // floor for one ranked row, so the right side survives a small featured tier
 const RANK_COLS = 2; // columns per ranked tier (more columns = narrower rows = easier to squash)
 const TIER_WEIGHT = 1.3; // multiplier making higher ranked tiers taller (↑ makes the top stand out)
@@ -108,9 +105,6 @@ const WALL = {
   em: 0.87, // rough column width (font size × em × 16px). ↓ yields more columns
 };
 // ===============================================
-
-const INNER = FRAME - 2 * BW;
-const SHEET_W = FRAME + 2 * GROUND;
 
 const titleOf = (item) => (typeof item === "string" ? item : item.title);
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -169,10 +163,10 @@ async function rowColumn({ items, startRank, sizes, colW, color, stretch }) {
   return `<div style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0">${rows.join("")}</div>`;
 }
 
-/** ranked tier: header + items dealt column-major into RANK_COLS columns */
-async function rankedTier({ tier, startRank, height, width, isLast }) {
+/** ranked tier: header + items dealt column-major into `cols` columns */
+async function rankedTier({ tier, startRank, height, width, cols: rankCols, isLast }) {
   const n = tier.items.length;
-  const cols = Math.min(RANK_COLS, Math.max(1, n));
+  const cols = Math.min(rankCols, Math.max(1, n));
   const rows = Math.ceil(n / cols); // tallest column, which is what sets the row height
   const sizes = tierSizes("ranked", (height - HDR_H) / rows, n);
   const colW = width / cols;
@@ -200,12 +194,11 @@ async function rankedTier({ tier, startRank, height, width, isLast }) {
 }
 
 /** wall tier: an unranked packed wall. Explicit columns + vertical rules (multicol substitute) */
-async function wallTier(tier, size) {
+async function wallTier(tier, size, cols, inner) {
   const names = tier.items.map(titleOf);
-  const cols = wallCols(names.length, size * WALL.em, INNER);
   const start = colSplit(names.length, cols);
   const gutter = 8;
-  const colW = (INNER - 2 * PAD - (cols - 1) * (2 * gutter + SEP)) / cols;
+  const colW = (inner - 2 * PAD - (cols - 1) * (2 * gutter + SEP)) / cols;
   // One line per item. fitSpan squashes with scaleX, which does not shrink the span's *layout*
   // width, so a shrunk title still overflows the column and would take two line boxes — leaving
   // a blank line mid-column and columns that end at different heights.
@@ -418,11 +411,8 @@ export function geometry(source = data) {
 // ---- The whole sheet ----
 
 export async function sheet() {
-  const tiers = data.tiers.filter((t) => t.items.length > 0);
-  const numbered = tiers.filter((t) => t.layout !== "wall");
-  const walls = tiers.filter((t) => t.layout === "wall");
-  const featured = numbered.find((t) => t.layout === "featured");
-  const ranked = numbered.filter((t) => t !== featured);
+  const g = geometry(data);
+  const { tiers, numbered, featured, ranked } = partition(data);
   const total = tiers.reduce((sum, t) => sum + t.items.length, 0);
 
   // Running numbers (featured → ranked, numbered in data order)
@@ -457,40 +447,20 @@ export async function sheet() {
     BW;
   const titleSpan = await fitT(data.title, {
     size: 36,
-    avail: INNER - 2 * MAST_PAD - countW,
+    avail: g.inner - 2 * MAST_PAD - countW,
     stretch: 1,
     letterSpacing: -0.72,
   });
-
-  // Top band: the featured row count sets the height. On the right, ranked tiers share it
-  // proportionally to rows × weight. The per-row `unit` has a MIN_RANK_UNIT floor, so a small
-  // featured tier cannot squash the right side (any extra band height just lets the featured
-  // rows grow via flex).
-  const featRows = featured?.items.length ?? 0;
-  const featW = ranked.length > 0 ? Math.round(INNER * FEAT_SPLIT) : INNER;
-  const rightW = INNER - featW;
-
-  const rankedRows = ranked.map((t) => Math.ceil(t.items.length / RANK_COLS));
-  const rankedWeights = ranked.map((_, i) => TIER_WEIGHT ** (ranked.length - 1 - i));
-  const weightedRows = rankedRows.reduce((sum, r, i) => sum + r * rankedWeights[i], 0);
-  const rankedFixed = ranked.length * HDR_H + Math.max(0, ranked.length - 1) * DIV;
-  const featBandH = Math.round(HDR_H + featRows * FEAT_ROW_H);
-  const rawUnit = featured
-    ? (featBandH - rankedFixed) / Math.max(1, weightedRows)
-    : LONE_ROW_H / Math.max(...rankedWeights, 1);
-  const unit = Math.max(rawUnit, MIN_RANK_UNIT);
-  const rankedHeights = rankedRows.map(
-    (r, i) => HDR_H + Math.round(r * rankedWeights[i] * unit) + (i < ranked.length - 1 ? DIV : 0),
-  );
 
   const rankedBlocks = await Promise.all(
     ranked.map((tier, i) =>
       rankedTier({
         tier,
         startRank: startRank.get(tier),
-        height: rankedHeights[i],
-        width: featured ? rightW : INNER,
-        isLast: featured ? i === ranked.length - 1 : false,
+        height: g.rankedHeights[i],
+        width: featured ? g.rightW : g.inner,
+        cols: g.rankCols,
+        isLast: i === ranked.length - 1,
       }),
     ),
   );
@@ -500,22 +470,18 @@ export async function sheet() {
     const featColumn = await rowColumn({
       items: featured.items,
       startRank: startRank.get(featured),
-      sizes: tierSizes("featured", FEAT_ROW_H, featRows),
-      colW: featW - DIV,
+      sizes: tierSizes("featured", g.featRowH, g.featRows),
+      colW: g.featW - DIV,
       color: featured.color ?? T.accent,
       stretch: TYPE.featured.stretch,
     });
-    // With no ranked tiers there is nothing on the right to size the band against — it is exactly
-    // the featured column. (Deriving it from weightedRows there gives 0, which collapses the band
-    // and drops the featured tier off the sheet entirely.)
-    const bandH = ranked.length > 0 ? rankedFixed + Math.ceil(weightedRows * unit) : featBandH;
     const border = ranked.length > 0 ? `border-right:${DIV}px solid ${T.ink};` : "";
     const rightSide =
       ranked.length > 0
-        ? `<div style="width:${rightW}px;display:flex;flex-direction:column">${rankedBlocks.join("")}</div>`
+        ? `<div style="width:${g.rightW}px;display:flex;flex-direction:column">${rankedBlocks.join("")}</div>`
         : "";
-    band = `<div style="height:${bandH}px;flex:none;display:flex;border-bottom:${DIV}px solid ${T.ink}">
-      <div style="width:${featW}px;flex:none;display:flex;flex-direction:column;${border}">
+    band = `<div style="height:${g.bandH}px;flex:none;display:flex;border-bottom:${DIV}px solid ${T.ink}">
+      <div style="width:${g.featW}px;flex:none;display:flex;flex-direction:column;${border}">
         ${tierHeader(featured.name, featured.items.length)}
         ${featColumn}
       </div>
@@ -526,11 +492,11 @@ export async function sheet() {
   }
 
   const wallBlocks = await Promise.all(
-    walls.map((tier, i) => wallTier(tier, WALL.sizes[Math.min(i, WALL.sizes.length - 1)])),
+    g.wallPlan.map((w) => wallTier(w.tier, w.size, w.cols, g.inner)),
   );
 
-  return `<div style="width:${SHEET_W}px;background:${T.ground};padding:${GROUND}px;font-family:'${T.font}';color:${T.ink}">
-  <div style="border:${BW}px solid ${T.ink};background:${T.bg};display:flex;flex-direction:column">
+  return `<div style="width:${g.sheetW}px;height:${g.sheetH}px;display:flex;background:${T.ground};padding:${GROUND}px;font-family:'${T.font}';color:${T.ink}">
+  <div style="flex:1;border:${BW}px solid ${T.ink};background:${T.bg};display:flex;flex-direction:column">
     <div style="height:${MAST_H}px;flex:none;display:flex;border-bottom:${BW}px solid ${T.ink}">
       <div style="flex:1;min-width:0;overflow:hidden;display:flex;align-items:center;padding:0 ${MAST_PAD}px;line-height:${LINE}">${titleSpan}</div>
       <div style="flex:none;white-space:nowrap;display:flex;flex-direction:column;align-items:flex-end;justify-content:center;padding:0 ${MAST_PAD}px;border-left:${BW}px solid ${T.ink}">
@@ -544,7 +510,7 @@ export async function sheet() {
     </div>
     ${band}
     ${wallBlocks.join("")}
-    <div style="padding:10px ${PAD}px;display:flex;justify-content:center;font-size:12px;font-weight:${T.weight};letter-spacing:2.2px;color:${T.muted}">banzuke</div>
+    <div style="height:${FOOT_H}px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:${T.weight};letter-spacing:2.2px;color:${T.muted}">banzuke</div>
   </div>
 </div>`;
 }
@@ -555,11 +521,15 @@ export async function sheet() {
 // with a normal run.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const draft = process.argv.includes("--draft");
+  const g = geometry(data);
   const out = await renderFile(await sheet(), `${import.meta.dirname}/banzuke.png`, {
     devicePixelRatio: draft ? 1 : 2,
     html: `${import.meta.dirname}/banzuke.html`,
   });
-  console.log(`${out.width}×${out.height} px, ${out.ms}ms → ${out.path}${draft ? " (draft)" : ""}`);
+  const ratio = (g.sheetW / g.sheetH).toFixed(2);
+  console.log(
+    `${out.width}×${out.height} px (${ratio}:1), ${out.ms}ms → ${out.path}${draft ? " (draft)" : ""}`,
+  );
   // The rendering half of the job is the easy half. This line is the reminder that the sheet has
   // not been checked yet, printed where whoever ran it is already looking — a note in the docs
   // loses to a tool result every time.

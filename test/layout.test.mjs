@@ -156,7 +156,7 @@ test("data with no featured tier still lays out (the lone-ranked path)", async (
 // The mirror of the case above, and the one that used to drop rows off the sheet: with no ranked
 // tiers there is nothing on the right to size the top band against, so it has to come from the
 // featured column itself. Sized off the (absent) ranked tiers it collapses to 0px.
-test("a featured tier with no ranked tier is sized from its own rows", async () => {
+test("a featured tier with no ranked tier divides the band into its rows", async () => {
   const featuredOnly = (n) => ({
     title: "T",
     unit: "titles",
@@ -176,10 +176,14 @@ test("a featured tier with no ranked tier is sized from its own rows", async () 
   };
   const two = await sheetFor("layout-feat-only-2", featuredOnly(2));
   const six = await sheetFor("layout-feat-only-6", featuredOnly(6));
+  const { geometry } = await templateFor("layout-feat-only-geom", featuredOnly(2));
   assert.ok(bandHeight(two) > 0, "the band collapsed, so the featured rows have nowhere to go");
+  assert.ok(bandHeight(six) > 0, "the band collapsed, so the featured rows have nowhere to go");
+  // Pinned to a canvas, the band no longer grows with the tier — the same height is divided into
+  // more, shorter rows.
   assert.ok(
-    bandHeight(six) > bandHeight(two) * 2,
-    `band should grow with the rows: 2 rows ${bandHeight(two)}px, 6 rows ${bandHeight(six)}px`,
+    geometry(featuredOnly(6)).featRowH < geometry(featuredOnly(2)).featRowH,
+    "more featured rows must divide the band into shorter ones",
   );
   assertRanks(six, 6);
 });
@@ -414,4 +418,14 @@ test("geometry: only a sheet still taller than square counts as a crop risk", as
   });
   assert.equal(huge.clamped, true);
   assert.equal(huge.cropRisk, true);
+});
+
+test("the sheet is pinned to the solved canvas", async () => {
+  const { sheet, geometry } = await templateFor("layout-canvas", SPARSE);
+  const g = geometry();
+  const html = await sheet();
+  assert.ok(
+    html.startsWith(`<div style="width:${g.sheetW}px;height:${g.sheetH}px`),
+    `root box does not carry the canvas: ${html.slice(0, 140)}`,
+  );
 });
