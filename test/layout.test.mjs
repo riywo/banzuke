@@ -69,6 +69,28 @@ const DENSE = {
   ],
 };
 
+/**
+ * An oversized featured tier against five ranked ones: too much data for the canvas, so it lands
+ * on the overflow path where the band is the legibility floor rather than what the canvas leaves.
+ * The floor *falls* as the columns rise, which is the trap — judged against the one-column floor,
+ * a four-column split looks harmless (a 4115px band makes featured rows 205px tall, so nothing
+ * ranked could rival them), while the band four columns actually delivers is 1228px and its rows
+ * come out taller than the featured ones.
+ */
+const BIG_FEATURED = {
+  title: "Big featured",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 40), color: "#d62828" },
+    ...Array.from({ length: 5 }, (_, i) => ({
+      name: `Ranked ${i}`,
+      layout: "ranked",
+      items: bulk(`r${i}-`, 20),
+    })),
+    { name: "Wall", layout: "wall", items: bulk("w", 50) },
+  ],
+};
+
 // JSON.stringify drops an undefined color, so a colorless tier lands in data.mjs without the key.
 const tier = (name, layout, items, color) => ({ name, layout, items, color });
 
@@ -480,6 +502,21 @@ test("RANK_COLS auto: hierarchy outranks row width", async () => {
   assert.ok(
     topRow < g.featRowH,
     `the top ranked row (${topRow}) must stay shorter than a featured one (${g.featRowH})`,
+  );
+});
+
+test("RANK_COLS auto: a clamped sheet is judged against the band it actually gets", async () => {
+  // The overflow path chooses the split and the band height together, so it is possible to accept
+  // a split on the strength of a band that only the *rejected* split would have produced. Assert
+  // the invariant on the layout that ships: whatever count came out, the top ranked tier's rows
+  // (the weighted unit) have to be shorter than a featured row in the same sheet.
+  const { geometry } = await templateFor("geom-clamped-hier", SPARSE);
+  const g = geometry(BIG_FEATURED);
+  assert.equal(g.clamped, true, "the fixture is meant to exercise the overflow path");
+  const topRow = g.unit * Math.max(...g.rankedWeights);
+  assert.ok(
+    topRow < g.featRowH,
+    `${g.rankCols} columns: the top ranked row (${topRow}) out-grows a featured one (${g.featRowH})`,
   );
 });
 

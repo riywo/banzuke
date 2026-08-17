@@ -305,17 +305,22 @@ function hierCeiling(featRowH, weights) {
  * and a sheet whose rank stops reading by size has lost its whole argument — so hierarchy wins
  * over row width.
  *
- * `avail` has to be the height the tiers actually get (derive()'s, not the raw bandH): on the
- * overflow path that is the floor `overflow()` hands out, not the band of the candidate width
- * that was just rejected.
+ * Each count is judged against the band *that count* would be handed — `band(cols)`, not one
+ * band measured once. On the fitting path the canvas fixes the band and every count sees the
+ * same one; on the overflow path the band is the legibility floor, and the floor falls as the
+ * columns rise (fewer rows per column need less height). Judging a wide split against the narrow
+ * split's roomier floor passes it on a band it never gets, which is how a ranked title ends up
+ * drawn at twice the size of the featured one above it.
  */
-function resolveRankCols({ rightW, avail, featRowH, ranked, rankedFixed }) {
+function resolveRankCols({ rightW, band, ranked, rankedFixed }) {
   if (RANK_COLS !== "auto") return RANK_COLS;
   const want = Math.min(RANK_COLS_MAX, Math.max(1, Math.round(rightW / RANK_COL_W)));
-  // No featured tier, or no band to speak of: hierarchy has no opinion, and reading one out of
-  // negative heights would flip the comparison and collapse the sheet to a single column.
-  if (ranked.length === 0 || featRowH <= 0 || avail <= 0) return want;
+  if (ranked.length === 0) return want;
   for (let cols = want; cols > 1; cols--) {
+    const { avail, featRowH } = band(cols);
+    // No featured tier, or no band to speak of: hierarchy has no opinion, and reading one out of
+    // negative heights would flip the comparison and collapse the sheet to a single column.
+    if (featRowH <= 0 || avail <= 0) return want;
     const { weighted, weights } = rankedShape(ranked, cols);
     if ((avail - rankedFixed) / weighted <= hierCeiling(featRowH, weights)) return cols;
   }
@@ -426,10 +431,14 @@ function planAt(sheetW, { featured, ranked, walls }) {
   // then the ranked column count both follow from it, in that order — the column count needs to
   // know how tall a featured row ended up before it can avoid out-growing one.
   const bandH = innerH - MAST_H - wallsH - FOOT_H;
-  const p = {
-    ...base,
-    ...shape(base, resolveRankCols({ rightW, ...bandParts(base, bandH), ranked, rankedFixed })),
-  };
+  // The canvas fixes the band here, so every candidate column count is offered the same one.
+  const cols = resolveRankCols({
+    rightW,
+    band: () => bandParts(base, bandH),
+    ranked,
+    rankedFixed,
+  });
+  const p = { ...base, ...shape(base, cols) };
 
   // A candidate width that cannot clear the band's legibility floor does not fit.
   return { ...p, ...derive(p, bandH), fits: bandH >= p.bandFloor, clamped: false };
@@ -442,13 +451,14 @@ function planAt(sheetW, { featured, ranked, walls }) {
  *
  * The column count is re-resolved here because the band changes underneath it: the candidate was
  * rejected precisely because its band was too small, and deciding the split against that band
- * rules out exactly the wider splits that would have made this sheet shorter. One re-derive
- * settles it — the new floor moves with the count, but only enough to re-check, not to chase.
+ * rules out exactly the wider splits that would have made this sheet shorter. Here the band is
+ * whatever floor the count itself produces, so each count is offered its own floor and the one
+ * that comes back is already consistent with the sheet it gets.
  */
 function overflow(p) {
   const cols = resolveRankCols({
     rightW: p.rightW,
-    ...bandParts(p, p.bandFloor),
+    band: (c) => bandParts(p, shape(p, c).bandFloor),
     ranked: p.ranked,
     rankedFixed: p.rankedFixed,
   });
