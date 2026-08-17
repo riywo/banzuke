@@ -71,9 +71,11 @@ The search always converges when a fitting width exists: `innerH` grows with `W`
 shrinks as the walls gain columns and `bandMin` is non-increasing (its ranked term falls as
 `RANK_COLS` resolves upward — see below — and its featured term does not move at all).
 
-If no width in range is accepted, render at `MAX_W` anyway and print a warning naming the fix —
-move titles into a wall tier, or lower `WALL.sizes`. A sheet that silently crushes its rows below
-their legibility floor is worse than an ugly sheet plus an explanation.
+If no width in range is accepted, keep `MAX_W`, give the band exactly `bandMin`, and let the sheet
+run past the target ratio rather than crushing its rows into it. Overflowing a little is harmless —
+a 1.6:1 sheet still posts uncropped — so the render warns only when the result is still **taller
+than square** (`SAFE_ASPECT`), which is the shape previews genuinely cut the top off. The warning
+names the fix: move titles into a wall tier, or lower `WALL.sizes`.
 
 ### Deriving the layout
 
@@ -95,9 +97,14 @@ where `fitSpan` stretches short titles to its ceiling and leaves the rest as tra
 the "stretched until it looks empty" failure the skill already warns about. Two column widths
 therefore become width-aware:
 
-- `RANK_COLS` accepts `"auto"` (the new default) alongside an integer. Auto resolves to
-  `clamp(round(rightW / RANK_COL_W), 1, 4)` with `RANK_COL_W = 300`. It is resolved inside the
-  search loop, since it changes `rankedRows` and so `weightedRows`.
+- `RANK_COLS` accepts `"auto"` (the new default) alongside an integer. Auto wants
+  `clamp(round(rightW / RANK_COL_W), 1, 4)` with `RANK_COL_W = 300`, **bounded by rank hierarchy**:
+  splitting a tier into more columns leaves fewer rows sharing the same band, which makes each row
+  *taller*, so an unbounded auto lets a ranked tier's first title out-type the featured tier's last
+  one — the one thing the eyeball checklist will not accept. Auto therefore steps down from its
+  preferred count until `unit ≤ featRowH × (featured.rowFill × featured.taper) ÷ (ranked.rowFill ×
+  max weight)`, a ceiling derived from the type knobs rather than guessed. Gappy rows are the
+  cheaper failure. Resolved inside the search loop, since it changes `rankedRows` and `weightedRows`.
 - The featured column stops scaling linearly: `featW = min(round(inner * FEAT_SPLIT), FEAT_MAX_W)`
   with `FEAT_MAX_W = 620`. Whatever it gives up goes to the ranked side.
 
@@ -120,8 +127,10 @@ Both defaults are starting points to settle in the render-and-eyeball loop, not 
 | Knob | Change |
 |---|---|
 | `ASPECT` | new — target ratio, default `16/9` |
-| `MIN_W` / `MAX_W` | new — 1024 / 2048 CSS px |
+| `SAFE_ASPECT` | new — `1`; below this the render warns that the sheet is still croppable |
+| `MIN_W` / `MAX_W` | new — 1024 / 2048 CSS px (the outer canvas, margins included) |
 | `STEP` | new — 16px search granularity |
+| `FOOT_H` | new — 34px; the footer gets an explicit height so the height math is exact |
 | `FEAT_ROW_MIN` | new — 30px legibility floor for a featured row |
 | `RANK_COL_W` / `FEAT_MAX_W` | new — 300 / 620, the width-absorption targets above |
 | `RANK_COLS` | now accepts `"auto"` (default) as well as an integer |
@@ -169,10 +178,10 @@ also carry the ratio.
 
 ## Risks
 
-- **Type gets smaller on dense sheets.** At the cap, the band is shorter than today, so featured
-  rows shrink. `FEAT_ROW_MIN = 30` keeps them legible (~23px text at the current `rowFill`), but
-  the top of a 400-title sheet will read less large than it does now. This is the trade for having
-  it visible at all.
+- **Type gets smaller on dense sheets.** At the cap the band is shorter than today, so featured
+  rows shrink: prototyped against ~390 titles, the featured tier sets at 30→20px against today's
+  46→31px (ranked 19→15, walls 14/11/9.5 — still monotonic). The top of a big sheet reads less
+  large than it does now. That is the trade for having it visible at all.
 - **The absorption defaults are guesses.** `RANK_COL_W` and `FEAT_MAX_W` decide whether wide
   sheets look composed or gappy, and only rendering will tell. Budget a tuning pass.
 - **Sparse sheets with no wall tier** have nothing to absorb slack, so the band stretches and the
