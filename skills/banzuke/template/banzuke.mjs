@@ -265,13 +265,43 @@ function partition(source) {
   const tiers = source.tiers.filter((t) => t.items.length > 0);
   const numbered = tiers.filter((t) => t.layout !== "wall");
   const featured = numbered.find((t) => t.layout === "featured");
+  // A `row:` puts a tier in the band whatever its layout, so a wall can sit up there packed the
+  // way the walls at the foot of the sheet are — no rules between rows, no per-row floor, just
+  // one line each. That is what makes a long tier cheap enough to keep in the band.
   return {
     tiers,
     numbered,
     featured,
     ranked: numbered.filter((t) => t !== featured),
-    walls: tiers.filter((t) => t.layout === "wall"),
+    band: tiers.filter((t) => t !== featured && (t.layout !== "wall" || t.row !== undefined)),
+    walls: tiers.filter((t) => t.layout === "wall" && t.row === undefined),
   };
+}
+
+/** A band wall's own height: it is content-driven, not a share of the band */
+function bandWallPlan(tier, cols) {
+  const size = tier.size ?? WALL.sizes[0];
+  const rows = Math.ceil(tier.items.length / cols);
+  const rowH = Math.round(size * LINE);
+  // Same border-box budget as the walls at the foot of the sheet: each row's 1px padding is
+  // inside rowH, while the block's own padding-bottom and rule sit outside its auto height.
+  return { size, cols, rows, rowH, height: HDR_H + 8 + rows * rowH + 10 };
+}
+
+/**
+ * The band's right side, as rows stacked top to bottom. Ranked tiers sharing a `row:` in data.mjs
+ * stand side by side within one row; without it each tier is its own row, which is the single
+ * stacked column this sheet started with. A row is as tall as its longest tier, so pairing a short
+ * tier with a long one costs nothing.
+ */
+function bandRows(band) {
+  const byKey = new Map();
+  band.forEach((t, i) => {
+    const k = t.row ?? `_${i}`;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(t);
+  });
+  return [...byKey.values()];
 }
 
 /** Rows per ranked tier at a given column count, and the weighting that shares the band out */
@@ -340,14 +370,18 @@ function bandParts(p, bandH) {
 /** The band-height-dependent half of a plan, split out so the overflow path can redo it */
 function derive(p, bandH) {
   const { avail, featRowH } = bandParts(p, bandH);
-  const unit = p.ranked.length > 0 ? (avail - p.rankedFixed) / p.weightedRows : 0;
+  const plan = p.bandRowPlan ?? [];
+  const gaps = Math.max(0, plan.length - 1) * DIV;
+  // Rigid rows keep exactly what they asked for; whatever is left over is shared out among the
+  // rows that can actually use it, in proportion to what they asked for.
+  const slack = Math.max(0, avail - p.rigidH - p.shareable - gaps);
+  const grow = (r) => (r.rigid || p.shareable <= 0 ? 0 : (slack * r.need) / p.shareable);
   return {
     bandH,
-    unit,
     featRowH,
-    rankedHeights: p.rankedRows.map(
-      (r, i) =>
-        HDR_H + Math.round(r * p.rankedWeights[i] * unit) + (i < p.ranked.length - 1 ? DIV : 0),
+    unit: 0,
+    bandRowHeights: plan.map(
+      (r, i) => Math.round(r.need + grow(r)) + (i < plan.length - 1 ? DIV : 0),
     ),
   };
 }
@@ -359,26 +393,55 @@ function derive(p, bandH) {
  * from this floor, and a fractional canvas height cannot be filled exactly.
  */
 function shape(p, cols) {
-  const { rows, weights, weighted } = rankedShape(p.ranked, cols);
+  const colsOf = (t) => Math.min(t.cols ?? cols, Math.max(1, t.items.length));
+
+  // A cell is one stack of tiers. Ranked stacks share whatever height the row gets; a wall stack
+  // is worth exactly what its lines add up to, so it asks for that and no more.
+  const cellOf = (stack) => {
+    if (stack.every((t) => t.layout === "wall")) {
+      const walls = stack.map((t) => bandWallPlan(t, colsOf(t)));
+      return { stack, walls, need: walls.reduce((s, w) => s + w.height, 0) };
+    }
+    const rows = stack.map((t) => Math.ceil(t.items.length / colsOf(t)));
+    const weights = stack.map((_, i) => TIER_WEIGHT ** (stack.length - 1 - i));
+    const weighted = rows.reduce((s, r, i) => s + r * weights[i], 0);
+    const fixed = stack.length * HDR_H + Math.max(0, stack.length - 1) * DIV;
+    return { stack, rows, weights, weighted, fixed, need: fixed + weighted * MIN_RANK_UNIT };
+  };
+
+  // Within a row, tiers sharing a `column:` stack inside one cell; the cells stand side by side.
+  const rows = p.bandRows.map((tiers) => {
+    const byCol = new Map();
+    tiers.forEach((t, i) => {
+      const k = t.column ?? `_${i}`;
+      if (!byCol.has(k)) byCol.set(k, []);
+      byCol.get(k).push(t);
+    });
+    const cells = [...byCol.values()].map(cellOf);
+    return {
+      tiers,
+      cells,
+      // A row of nothing but walls cannot use extra height, so it never takes a share of it.
+      rigid: cells.every((c) => c.walls),
+      need: Math.max(...cells.map((c) => c.need)),
+    };
+  });
+
+  const rigidH = rows.reduce((s, r) => s + (r.rigid ? r.need : 0), 0);
+  const shareable = rows.reduce((s, r) => s + (r.rigid ? 0 : r.need), 0);
   const bandFloor =
     p.bandRule +
     Math.ceil(
       Math.max(
         p.featured ? HDR_H + p.featRows * FEAT_ROW_MIN : 0,
-        p.ranked.length > 0 ? p.rankedFixed + weighted * MIN_RANK_UNIT : 0,
+        rows.length > 0 ? rigidH + shareable + Math.max(0, rows.length - 1) * DIV : 0,
       ),
     );
-  return {
-    rankCols: cols,
-    rankedRows: rows,
-    rankedWeights: weights,
-    weightedRows: weighted,
-    bandFloor,
-  };
+  return { rankCols: cols, bandRowPlan: rows, rigidH, shareable, bandFloor };
 }
 
 /** Lay the data out against one candidate sheet width and report whether it fits */
-function planAt(sheetW, { featured, ranked, walls }) {
+function planAt(sheetW, { featured, ranked, walls, band }) {
   const sheetH = Math.round(sheetW / ASPECT);
   const inner = sheetW - 2 * GROUND - 2 * BW;
   const innerH = sheetH - 2 * GROUND - 2 * BW;
@@ -421,6 +484,7 @@ function planAt(sheetW, { featured, ranked, walls }) {
     walls,
     featRows,
     rankedFixed,
+    bandRows: bandRows(band),
     // Only the featured layout wraps the band in a box of its own, and that box's bottom rule is
     // inside the height it is given — so with a featured tier the tiers get DIV less than bandH.
     bandRule: featured ? DIV : 0,
@@ -540,12 +604,15 @@ export async function sheet() {
     letterSpacing: -0.72,
   });
 
+  // geometry() now plans the band as rows of cells (see bandRowPlan/bandRowHeights) so a
+  // data.mjs `row:`/`column:` can rearrange it, but this renderer still only draws the shape the
+  // sheet always had: one ranked tier per row, so `ranked[i]` and `bandRowHeights[i]` line up.
   const rankedBlocks = await Promise.all(
     ranked.map((tier, i) =>
       rankedTier({
         tier,
         startRank: startRank.get(tier),
-        height: g.rankedHeights[i],
+        height: g.bandRowHeights[i],
         width: g.rightW, // the whole inner width when there is no featured column to share it with
         cols: g.rankCols,
         isLast: i === ranked.length - 1,

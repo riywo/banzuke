@@ -490,15 +490,28 @@ test("RANK_COLS auto: the ranked block gains columns as the canvas widens", asyn
   );
 });
 
+// Every band row's own cell now carries the fixed/weighted numbers `derive()` divided its height
+// by (see `shape()`), so the "weighted unit" the old top-level `g.unit` used to expose is
+// reconstructed per cell instead: the height of that cell's tallest single ranked row. None of
+// these fixtures use `row:`, so every ranked tier still gets a row (and a cell) of its own — this
+// is the same invariant `resolveRankCols`/`hierCeiling` enforce, just read back through the grid.
+const topRankedRow = (g) =>
+  Math.max(
+    ...g.bandRowPlan.flatMap((row, i) =>
+      row.cells
+        .filter((c) => !c.walls)
+        .map((c) => ((g.bandRowHeights[i] - c.fixed) / c.weighted) * Math.max(...c.weights)),
+    ),
+  );
+
 test("RANK_COLS auto: hierarchy outranks row width", async () => {
   // DENSE is wide enough to want four columns, but the wider splits would make its ranked rows
   // rival its featured ones — gappy rows beat a ranking that stops reading by size. How many
   // columns that leaves is data- and knob-dependent (and a knob away from changing), so assert
-  // the principle: `unit` is the *weighted* unit, and the top ranked tier's rows are
-  // `unit × rankedWeights[0]`, which is what has to stay under a featured row.
+  // the principle: no band cell's tallest ranked row may rival a featured one.
   const { geometry } = await templateFor("geom-rankcols-hier", SPARSE);
   const g = geometry(DENSE);
-  const topRow = g.unit * Math.max(...g.rankedWeights);
+  const topRow = topRankedRow(g);
   assert.ok(
     topRow < g.featRowH,
     `the top ranked row (${topRow}) must stay shorter than a featured one (${g.featRowH})`,
@@ -508,12 +521,12 @@ test("RANK_COLS auto: hierarchy outranks row width", async () => {
 test("RANK_COLS auto: a clamped sheet is judged against the band it actually gets", async () => {
   // The overflow path chooses the split and the band height together, so it is possible to accept
   // a split on the strength of a band that only the *rejected* split would have produced. Assert
-  // the invariant on the layout that ships: whatever count came out, the top ranked tier's rows
-  // (the weighted unit) have to be shorter than a featured row in the same sheet.
+  // the invariant on the layout that ships: whatever count came out, no band cell's tallest ranked
+  // row may rival a featured row in the same sheet.
   const { geometry } = await templateFor("geom-clamped-hier", SPARSE);
   const g = geometry(BIG_FEATURED);
   assert.equal(g.clamped, true, "the fixture is meant to exercise the overflow path");
-  const topRow = g.unit * Math.max(...g.rankedWeights);
+  const topRow = topRankedRow(g);
   assert.ok(
     topRow < g.featRowH,
     `${g.rankCols} columns: the top ranked row (${topRow}) out-grows a featured one (${g.featRowH})`,
@@ -556,4 +569,64 @@ test("RANK_COLS: an explicit number overrides the auto split", async () => {
   );
   const { geometry } = await import(pathToFileURL(file).href);
   assert.equal(geometry().rankCols, 3);
+});
+
+// ---- the band grid ----
+
+const GRID = {
+  title: "Grid",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 6), color: "#d62828" },
+    { name: "A", layout: "ranked", items: bulk("a", 10), row: 1, column: 1, color: "#1b50a8" },
+    { name: "B", layout: "ranked", items: bulk("b", 20), row: 1, column: 1, cols: 2 },
+    { name: "C", layout: "wall", items: bulk("c", 96), row: 1, column: 2, cols: 3, size: 12 },
+    { name: "Rest", layout: "wall", items: bulk("r", 120) },
+  ],
+};
+
+test("band grid: `row:` and `column:` build rows of cells of stacks", async () => {
+  const { geometry } = await templateFor("grid-shape", GRID);
+  const g = geometry();
+  assert.equal(g.bandRowPlan.length, 1, "all three band tiers share row 1");
+  const [row] = g.bandRowPlan;
+  assert.equal(row.cells.length, 2, "two columns: the A/B stack, and C");
+  assert.deepEqual(
+    row.cells.map((c) => c.stack.map((t) => t.name)),
+    [["A", "B"], ["C"]],
+  );
+});
+
+test("band grid: a wall tier with a `row:` moves into the band, not the foot", async () => {
+  const { geometry } = await templateFor("grid-wall", GRID);
+  const g = geometry();
+  assert.deepEqual(
+    g.wallPlan.map((w) => w.tier.name),
+    ["Rest"],
+    "only the tier without a `row:` stays at the foot",
+  );
+  const cell = g.bandRowPlan[0].cells.find((c) => c.walls);
+  assert.ok(cell, "the band should hold a wall cell");
+  assert.equal(cell.walls[0].size, 12); // data.mjs `size:`
+  assert.equal(cell.walls[0].rows, 32); // 96 items over `cols: 3`
+});
+
+test("band grid: a wall in the band is far cheaper than the same tier ranked", async () => {
+  const { geometry } = await templateFor("grid-cost", GRID);
+  const asWall = geometry();
+  const asRanked = geometry({
+    ...GRID,
+    tiers: GRID.tiers.map((t) => (t.name === "C" ? { ...t, layout: "ranked" } : t)),
+  });
+  assert.ok(
+    asWall.sheetH < asRanked.sheetH,
+    `wall ${asWall.sheetH} should be shorter than ranked ${asRanked.sheetH}`,
+  );
+});
+
+test("band grid: with no `row:` anywhere, the band is one tier per row as before", async () => {
+  const { geometry } = await templateFor("grid-default", SPARSE);
+  const g = geometry();
+  assert.equal(g.bandRowPlan.length, 2, "two ranked tiers, stacked");
+  for (const row of g.bandRowPlan) assert.equal(row.cells.length, 1);
 });
