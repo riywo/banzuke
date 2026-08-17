@@ -684,12 +684,31 @@ test("band grid: a wall in the band is far cheaper than the same tier ranked", a
   );
 });
 
+/**
+ * A wall beside a ranked cell, in a band of *two* rows. The second row is the whole point: with a
+ * single-row band the band's own floor already guarantees the assertion below, so GRID (one row)
+ * passed it with the wall reservation deleted from either place it lives. Two rows is also the
+ * shape where reserving the wall's height and *then* handing the row a share of the shared unit
+ * paid for it twice and pushed the band past its box.
+ */
+const GRID_TWO_ROW = {
+  title: "Two Row",
+  unit: "titles",
+  tiers: [
+    { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+    { name: "A", layout: "ranked", items: bulk("a", 6), row: 1, column: 1, color: "#1b50a8" },
+    { name: "W", layout: "wall", items: bulk("w", 60), row: 1, column: 2, size: 12 },
+    { name: "B", layout: "ranked", items: bulk("b", 10), row: 2 },
+  ],
+};
+
 // A wall cell cannot grow with the rest of its row, so its height has to be reserved rather than
-// shared — the row GRID's own "C" wall shares with the "A"/"B" ranked stack is exactly this case.
-// Missing this let a mixed row size itself off the ranked cell alone and clip the wall beside it.
+// shared. Missing this let a mixed row size itself off the ranked cell alone and clip the wall
+// beside it.
 test("band grid: a flexible row is never shorter than the wall cell it holds", async () => {
-  const { geometry } = await templateFor("grid-wall-floor", GRID);
+  const { geometry } = await templateFor("grid-wall-floor", GRID_TWO_ROW);
   const g = geometry();
+  assert.equal(g.bandRowPlan.length, 2, "the fixture needs two band rows to be discriminating");
   const row = g.bandRowPlan[0];
   const wallCell = row.cells.find((c) => c.walls);
   const wallNeed = wallCell.walls.reduce((sum, w) => sum + w.height, 0);
@@ -697,6 +716,78 @@ test("band grid: a flexible row is never shorter than the wall cell it holds", a
     g.bandRowHeights[0] >= wallNeed,
     `row height (${g.bandRowHeights[0]}) must clear its wall cell's need (${wallNeed})`,
   );
+});
+
+/**
+ * The band deals its rows out of a fixed box, so their heights have to add back up to it exactly:
+ * `bandH` less the band's own bottom rule, which border-box keeps inside `bandH`. Over means the
+ * rows run past the box and takumi cuts whatever hangs off the bottom; under means blank paper
+ * inside the band.
+ *
+ * Nothing else can see this. The canvas is pinned, so an overflowing band still renders a sheet of
+ * exactly `sheetH` — the canvas-fill test below passes either way — and geometry() keeps returning
+ * finite, plausible-looking numbers while a wall's lines quietly go missing. `--report` prints the
+ * residue for the same reason.
+ */
+const bandRowsFill = (g) => g.bandRowHeights.reduce((s, h) => s + h, 0) - (g.bandH - g.bandRule);
+
+test("band grid: the band's rows add up to exactly the band", async () => {
+  // A wall-bound row in a multi-row band is the shape that broke this: its height was counted
+  // once in the shared unit and again as its floor. The last case is the reviewer's 646px spill.
+  const cases = [
+    ["shipped", undefined],
+    ["grid", GRID],
+    ["twoRow", GRID_TWO_ROW],
+    ["sparse", SPARSE],
+    ["dense", DENSE],
+    ["bigFeatured", BIG_FEATURED],
+    [
+      "wideWall",
+      {
+        title: "T",
+        unit: "titles",
+        tiers: [
+          { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+          { name: "A", layout: "ranked", items: bulk("a", 2), row: 1, column: 1 },
+          { name: "W", layout: "wall", items: bulk("w", 300), row: 1, column: 2, size: 9 },
+          { name: "B", layout: "ranked", items: bulk("b", 20), row: 2 },
+        ],
+      },
+    ],
+  ];
+  for (const [name, data] of cases) {
+    const { geometry } = await templateFor(`grid-band-fill-${name}`, data);
+    const g = geometry();
+    assert.equal(
+      bandRowsFill(g),
+      0,
+      `${name}: rows ${g.bandRowHeights} sum to ${g.bandRowHeights.reduce((s, h) => s + h, 0)}, ` +
+        `but the band holds ${g.bandH - g.bandRule} (bandH ${g.bandH} less a ${g.bandRule}px rule)`,
+    );
+  }
+});
+
+// A band of nothing but wall rows is the one shape that legitimately cannot fill its box: a rigid
+// row is exactly as tall as its lines and no other row is there to take the rest. That is a real
+// defect in the *layout* (blank paper on the sheet), not in the height math, so the residue is
+// reported rather than hidden — the point is that it is visible at all.
+test("--report: a band nothing can grow into reports the height no row claims", async () => {
+  const { report, geometry } = await templateFor("grid-band-unclaimed", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "W", layout: "wall", items: bulk("w", 30), row: 1, size: 11 },
+    ],
+  });
+  const g = geometry();
+  assert.ok(
+    g.bandRowPlan.every((r) => r.rigid),
+    "the fixture's band should be rigid throughout",
+  );
+  const r = await report();
+  assert.ok(r.bandResidue < 0, `expected unclaimed band height, got ${r.bandResidue}`);
+  assert.equal(r.bandResidue, bandRowsFill(g));
 });
 
 test("band grid: with no `row:` anywhere, the band is one tier per row as before", async () => {
@@ -788,6 +879,19 @@ test("band grid: `row:` and `column:` together, TIER_WEIGHT compounds across row
     Math.abs(renderedRatio - TIER_WEIGHT ** 2) < 0.15,
     `rendered top:bottom font sizes should also compound to TIER_WEIGHT² ` +
       `(${(TIER_WEIGHT ** 2).toFixed(2)}), got ${renderedRatio.toFixed(2)} (${topSize} vs ${bottomSize})`,
+  );
+
+  // Top and Bottom are stacks of one, so everything above this line is the *row* weight only:
+  // flattening `cellOf`'s within-stack weights to 1 left all of it green. MidA over MidB is the
+  // other half — one TIER_WEIGHT step, inside a single cell, with the row weight identical for
+  // both because they share a row.
+  const midASize = spanSizes[1 + 4 + 6];
+  const midBSize = spanSizes[1 + 4 + 6 + 6];
+  const stackRatio = midASize / midBSize;
+  assert.ok(
+    Math.abs(stackRatio - TIER_WEIGHT) < 0.12,
+    `MidA:MidB should be one TIER_WEIGHT step (${TIER_WEIGHT}), got ${stackRatio.toFixed(2)} ` +
+      `(${midASize} vs ${midBSize})`,
   );
 });
 
@@ -1221,6 +1325,144 @@ test("band grid: `cols: 0` on a tier beside another does not silently drop its i
   for (const item of ["z1", "z6", "o1", "o6"]) assert.ok(html.includes(`>${item}<`), item);
 });
 
+// Every tier in a `column:` stack is drawn at the full cell width with its own `cols:`, one under
+// the other, so what the stack needs from the row is its *widest* tier — not the sum. Summing them
+// gave a stack of three single-column tiers three times the width demand of the single-column tier
+// beside it (measured 562px against 188px), which drew one tier at a time in a very wide box while
+// its neighbour crammed twelve items into what was left.
+test("band grid: a cell's width share is its widest tier, not its stack added up", async () => {
+  const { geometry, sheet } = await templateFor("grid-width-share", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "S1", layout: "ranked", items: bulk("s1-", 4), row: 1, column: 1, cols: 1 },
+      { name: "S2", layout: "ranked", items: bulk("s2-", 4), row: 1, column: 1, cols: 1 },
+      { name: "S3", layout: "ranked", items: bulk("s3-", 4), row: 1, column: 1, cols: 1 },
+      { name: "Other", layout: "ranked", items: bulk("o", 12), row: 1, column: 2, cols: 1 },
+    ],
+  });
+  const g = geometry();
+  const html = await sheet();
+  const [stacked, other] = [
+    ...html.matchAll(/<div style="width:(\d+)px;flex:none;display:flex;flex-direction:column;/g),
+  ]
+    .map((m) => Number(m[1]))
+    .slice(-2);
+  // Within the DIV-wide rule between the two cells and the floor the split rounds with.
+  assert.ok(
+    Math.abs(stacked - other) <= 4,
+    `one column each side should split rightW ${g.rightW} evenly, got ${stacked} / ${other}`,
+  );
+});
+
+// `cols:` and `column:` are numbers in a file the skill tells the user to edit freely, and the
+// width they imply is not checked anywhere else — an over-wide split used to reach fitSpan as a
+// negative `avail` and die there, pointing at a title rather than at the number that caused it.
+// Each of these threw before the width clamp; all of them have to render every item.
+test("band grid: a column count wider than the width holds is clamped, not thrown", async () => {
+  const cases = {
+    "five cells side by side": [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      ...[1, 2, 3, 4, 5].map((i) => ({
+        name: `C${i}`,
+        layout: "ranked",
+        items: bulk(`c${i}-`, 6),
+        row: 1,
+        column: i,
+      })),
+    ],
+    "cols: 40 on a 40-item ranked tier": [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "R", layout: "ranked", items: bulk("r", 40), cols: 40 },
+    ],
+    "cols: 60 on a 60-item band wall": [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "W", layout: "wall", items: bulk("w", 60), row: 1, cols: 60 },
+    ],
+    "cols: 40 on a foot wall": [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "R", layout: "ranked", items: bulk("r", 6) },
+      { name: "W", layout: "wall", items: bulk("w", 40), cols: 40 },
+    ],
+  };
+  for (const [label, tiers] of Object.entries(cases)) {
+    const html = await sheetFor(`grid-narrow-${label.replace(/\W+/g, "-")}`, {
+      title: "T",
+      unit: "titles",
+      tiers,
+    });
+    const items = tiers.flatMap((t) => t.items);
+    for (const item of [items[0], items.at(-1)]) {
+      assert.ok(html.includes(`>${item}<`), `${label}: ${item} is missing from the sheet`);
+    }
+  }
+});
+
+// Past a point no clamp helps: each cell needs a column and each column needs MIN_COL_W, so a row
+// of enough cells has no arrangement at any canvas. The solver widens first (five cells fit a wider
+// sheet perfectly well), and only says so when even the maximum width cannot hold the row.
+test("band grid: a row of more cells than any canvas can hold fails with a message that names it", async () => {
+  const { geometry } = await templateFor("grid-crowded", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      ...Array.from({ length: 30 }, (_, i) => ({
+        name: `C${i + 1}`,
+        layout: "ranked",
+        items: bulk(`c${i + 1}-`, 3),
+        row: 1,
+        column: i + 1,
+      })),
+    ],
+  });
+  assert.throws(geometry, (e) => {
+    assert.match(e.message, /data\.mjs/);
+    assert.match(e.message, /30 cells side by side/);
+    assert.match(e.message, /column:/); // the remedy, not just the complaint
+    return true;
+  });
+});
+
+// A cell is one box with one way of spending its height. Reading a mixed stack as ranked (what
+// `stack.every(...)` did) silently dropped the wall's `size:` and its packing, gave its items rank
+// numbers and moved the canvas — a wrong sheet rather than a refused one.
+test("band grid: a `column:` stack mixing a wall with a ranked tier is refused", async () => {
+  const { geometry } = await templateFor("grid-mixed-stack", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "W", layout: "wall", items: bulk("w", 30), row: 1, column: 1, size: 11 },
+      { name: "R", layout: "ranked", items: bulk("r", 6), row: 1, column: 1 },
+    ],
+  });
+  assert.throws(geometry, (e) => {
+    assert.match(e.message, /W \+ R/);
+    assert.match(e.message, /all wall or all ranked/);
+    return true;
+  });
+});
+
+// `size:` reaches the height math straight from data.mjs the same way `cols:` does, and a
+// non-positive one makes every line box zero-or-negative tall — which took a band wall's whole
+// tier to -18px and dropped most of its items.
+test("band grid: a nonsense `size:` on a band wall still draws the tier", async () => {
+  const { geometry, sheet } = await templateFor("grid-size-negative", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "W", layout: "wall", items: bulk("w", 30), row: 1, size: -5 },
+    ],
+  });
+  const g = geometry();
+  for (const h of g.bandRowHeights) assert.ok(h > 0, `band row height ${h} should be positive`);
+  const html = await sheet();
+  for (const item of ["w1", "w30"]) assert.ok(html.includes(`>${item}<`), item);
+});
+
 // ---- --report: scoring a layout instead of rendering it ----
 
 test("--report: measures coverage, the type ladder, slack and squeeze", async () => {
@@ -1234,6 +1476,78 @@ test("--report: measures coverage, the type ladder, slack and squeeze", async ()
   }
   assert.ok(Array.isArray(r.slack), "per-cell slack");
   assert.ok(Number.isInteger(r.squeeze), "count of titles at scaleX < 1");
+});
+
+// The ladder is read down the sheet, but the band is a grid: two cells in the same row stand *side
+// by side*, and their sizes say nothing about each other. Chaining them anyway reported an
+// inversion on every correct two-cell sheet — noise on exactly the arrangement the exploration
+// section tells an agent to try. What a rung is genuinely under is what it must be compared with.
+test("--report: the ladder does not call two cells of one row an inversion", async () => {
+  const sideBySide = {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "F", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      // A long tier and a short one in the same row: the short one is handed the tall one's row
+      // height, so it types much bigger — a real difference, but not one down the sheet.
+      { name: "Left", layout: "ranked", items: bulk("l", 20), row: 1, column: 1 },
+      { name: "RightBig", layout: "ranked", items: bulk("r", 4), row: 1, column: 2 },
+    ],
+  };
+  const { report } = await templateFor("report-ladder-beside", sideBySide);
+  const r = await report();
+  const right = r.ladder.find((x) => x.name === "RightBig");
+  const left = r.ladder.find((x) => x.name === "Left");
+  assert.ok(right.beside, "the second cell of a row stands beside the first, not under it");
+  assert.ok(
+    right.from > left.to,
+    `the fixture needs the right cell to out-type the left one (${right.from} vs ${left.to}), ` +
+      "or a flat chain would not have flagged it either",
+  );
+  // What it is actually under is the featured column's last row, and it clears that.
+  assert.ok(
+    right.above >= right.from,
+    `RightBig ${right.from} should clear what is above it (${right.above})`,
+  );
+  for (const rung of r.ladder) {
+    assert.ok(
+      rung.above === null || rung.above >= rung.from,
+      `no rung should invert here: ${rung.name} ${rung.from} under ${rung.above}`,
+    );
+  }
+});
+
+test("--report: the ladder still catches a tier out-typing the row above it", async () => {
+  // A foot wall typed larger than the band row it sits under: an inversion straight down the
+  // sheet, which is what `!>` is for.
+  const { report } = await templateFor("report-ladder-invert", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "F", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "Tiny", layout: "wall", items: bulk("t", 40), row: 1, size: 8 },
+      { name: "Foot", layout: "wall", items: bulk("g", 20) },
+    ],
+  });
+  const r = await report();
+  const foot = r.ladder.find((x) => x.name === "Foot");
+  assert.ok(
+    foot.above < foot.from,
+    `the foot wall (${foot.from}) should read as bigger than the band above it (${foot.above})`,
+  );
+});
+
+test("--report: the shipped template's own ladder has no inversion in it", async () => {
+  // The first --report anyone runs is on the unedited scaffold. A failure there with no
+  // explanation teaches the reader to ignore the line.
+  const { report } = await templateFor("report-ladder-shipped", undefined);
+  const r = await report();
+  const inverted = r.ladder.filter((x) => x.above !== null && x.above < x.from);
+  assert.deepEqual(
+    inverted.map((x) => `${x.name} ${x.from}`),
+    [],
+    "the shipped WALL.sizes/data should leave the default sheet's ladder clean",
+  );
 });
 
 test("--report: coverage rises when the same data is set larger", async () => {
@@ -1261,6 +1575,13 @@ test("--report: coverage rises when the same data is set larger", async () => {
 // property map rather than matching one fixed-order pattern), so a bug in *either* parser — the
 // implementation's regex or a future rewrite of it — has to show up as a disagreement between the
 // two, not as two copies of the same mistake agreeing.
+//
+// The same test also pins the *text* the ink is measured from. A span holds esc()'d text, so "&"
+// sits in the HTML as the five glyphs of "&amp;" while takumi draws it as one — measuring the
+// escaped form inflated coverage by 49% on an ampersand-heavy sheet. The decoding below is written
+// out by hand rather than imported from lib/entities.mjs on purpose: an independent parser that
+// borrowed the implementation's decoder could only ever agree with it, which is the failure mode
+// the previous version of this test had.
 //
 // `measureWidth` here must come from the *same* scaffolded copy `report()` runs in, not the
 // top-level import: takumi's renderer is a singleton per module instance (see `getRenderer()`), and
@@ -1290,7 +1611,13 @@ async function independentSpanScore(html, sheetW, sheetH, measureWidth) {
     // No transform declaration at all means the span drew at its natural width — scale 1, the exact
     // case the bug dropped.
     const scale = Number(props.transform?.match(/scaleX\(([\d.]+)\)/)?.[1] ?? 1);
-    const w = await measureWidth(text, { size, weight, family, letterSpacing });
+    const drawn = text
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&"); // last, so "&amp;lt;" does not become "<"
+    const w = await measureWidth(drawn, { size, weight, family, letterSpacing });
     ink += w * scale * size;
     if (scale < 1) squeeze += 1;
   }
@@ -1315,6 +1642,29 @@ test("--report: coverage and squeeze match an independently parsed count of ever
     ["bigFeatured", BIG_FEATURED],
     ["sparse", SPARSE],
     ["dense", DENSE],
+    // Entity-heavy on purpose: every one of these titles escapes to something wider than it draws,
+    // so a coverage that measures the escaped text disagrees here and nowhere else.
+    [
+      "entities",
+      {
+        title: 'Rock & Roll <the> "Best"',
+        unit: "titles & things",
+        tiers: [
+          {
+            name: "A & B",
+            layout: "featured",
+            items: ["Tom & Jerry", "R&B & Soul", "\"Quoted\" & 'Single'", "<Angle> & &more&"],
+            color: "#d62828",
+          },
+          {
+            name: "C & D",
+            layout: "ranked",
+            items: ["Salt & Pepper", "Law & Order", "Fish & Chips & Peas", "AT&T & Co"],
+          },
+          { name: "E & F", layout: "wall", items: ["Ben & Jerry", "M&M", "Q&A", "R&D & QA"] },
+        ],
+      },
+    ],
   ]) {
     const { report, sheet, geometry, measureWidth } = await templateForWithMeasure(
       `report-span-check-${name}`,

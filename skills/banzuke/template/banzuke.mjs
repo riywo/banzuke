@@ -12,6 +12,7 @@
 import { pathToFileURL } from "node:url";
 import data from "./data.mjs";
 import {
+  decodeHtmlEntities,
   esc,
   FONT_FAMILY,
   fitSpan,
@@ -78,6 +79,11 @@ const MAX_W = 2048; // widest. dpr 2 doubles it, and 4096px is X's ceiling
 const STEP = 16; // width search granularity
 const FEAT_ROW_MIN = 30; // a featured row shorter than this stops being legible
 const RANK_COL_W = 300; // target width of one ranked column when RANK_COLS is "auto"
+const MIN_COL_W = 80; // narrowest a band column may be. A ranked row spends ~57px of its column on
+//                       spine + rank cell + padding, so below this there is nothing left for the
+//                       title and fitSpan throws on a negative `avail`. Every band tier's column
+//                       count is clamped against it (tierCols), and a row with more cells than the
+//                       widest canvas can hold at this size is refused outright by geometry().
 const FEAT_MAX_W = 620; // the featured column stops widening here; the ranked side takes the rest
 const FOOT_H = 34; // footer strip, an explicit height so the height math is exact
 
@@ -104,7 +110,10 @@ const RANK_COLS_MAX = 4; // ceiling for "auto". At MAX_W the RANK_COL_W split al
 //                          title — so this, not RANK_COL_W, is what binds on the widest sheets.
 const TIER_WEIGHT = 1.3; // multiplier making higher ranked tiers taller (↑ makes the top stand out)
 const WALL = {
-  sizes: [14, 11, 9.5], // wall font sizes (top wall first; the last one repeats if you run out)
+  // Wall font sizes (top wall first; the last one repeats if you run out). The first one also has
+  // to stay under the last row of the band above it, or the foot out-types the ranking and
+  // --report's ladder says so — lower it before anything else when that happens.
+  sizes: [13, 11, 9.5],
   stretch: 2,
   em: 0.87, // rough column width (font size × em × 16px). ↓ yields more columns
 };
@@ -145,7 +154,8 @@ async function row({ item, rank, size, colW, color, stretch, last }) {
   const numbered = rank !== undefined;
   const rankSize = Math.max(10, size * 0.5);
   const rankW = numbered ? Math.round(6 + 1.4 * rankSize) : 0;
-  // Without a number the title starts where the number would have: one PAD off the spine.
+  // With no number cell to indent past, the title takes a full PAD off the spine rather than the
+  // 8px gap that otherwise separates it from the number.
   const gap = numbered ? 8 : PAD;
   const avail = colW - SPINE - rankW - gap - PAD;
   const span = await fitT(titleOf(item), { size, avail, stretch });
@@ -237,8 +247,8 @@ async function wallTier(tier, size, cols, inner, rule = true) {
       return `<div style="flex:1;min-width:0;${colRule}${pr}">${items.join("")}</div>`;
     }),
   );
-  // In the band the enclosing cell already draws the rule underneath, so a wall there must not
-  // draw its own or the two stack up into a double line.
+  // In the band the enclosing *row* already draws the rule underneath (the cell only rules to its
+  // right), so a wall there must not draw its own or the two stack up into a double line.
   const under = rule ? `border-bottom:${DIV}px solid ${T.ink};` : "";
   return `<div style="${under}padding-bottom:10px">
     ${tierHeader(tier.name, names.length)}
@@ -270,17 +280,47 @@ function wallCols(n, em, inner) {
 
 /**
  * How many columns a band tier deals into: its own `cols:` from data.mjs when it sets one, the
- * sheet's shared count otherwise. Floored at 1, because a stray `0` or negative in data.mjs turns
- * `n / cols` into `Infinity` rows and everything built on it into a broken canvas; capped at the
- * tier's own item count, because a tier cannot fill more columns than it has items.
+ * sheet's shared count otherwise. Three clamps, because all three are reachable from a data.mjs
+ * edit alone. Floored at 1: a stray `0` or negative turns `n / cols` into `Infinity` rows and
+ * everything built on it into a broken canvas. Capped at the tier's own item count: a tier cannot
+ * fill more columns than it has items. Capped at `maxCols`, the columns the width can hold: this
+ * is the one that used to be missing, and without it `cols: 40` on a 40-item tier deals 13px
+ * columns and the run dies inside fitSpan on a negative `avail` — an opaque stack trace for what
+ * is only a number in the data.
  *
  * One function rather than one clamp per caller: the height math, the column solver and the markup
  * all divide by this number, and if any two of them disagree the width one hands out and the
  * columns another draws drift apart — an over-wide `cols:` over-credits a cell's share of the row
  * and starves its neighbor's `avail` negative.
  */
-const tierCols = (tier, cols) =>
-  Math.min(Math.max(1, tier.cols ?? cols), Math.max(1, tier.items.length));
+const tierCols = (tier, cols, maxCols) =>
+  Math.min(
+    Math.max(1, tier.cols ?? cols),
+    Math.max(1, tier.items.length),
+    Math.max(1, Math.floor(maxCols)),
+  );
+
+/**
+ * The most columns any one cell of a row may plan for, given the width that row has to share.
+ *
+ * A row hands its width out *in proportion to its cells' column counts*, so every column in a row
+ * ends up the same width — which turns the whole row into one budget, `width / MIN_COL_W`, and an
+ * equal share of that budget per cell is enough to hold every column at or above MIN_COL_W however
+ * lopsided the cells turn out to be. Deliberately not a function of what each cell asked for: the
+ * width follows the column counts, so a cap that followed the width too would chase its own tail.
+ */
+const cellColBudget = (width, cellCount) => Math.max(1, width / Math.max(1, cellCount) / MIN_COL_W);
+
+/** The cells of one band row: tiers sharing a `column:` stack into one cell, in data order. */
+function rowCells(tiers) {
+  const byCol = new Map();
+  tiers.forEach((t, i) => {
+    const k = t.column ?? `_${i}`;
+    if (!byCol.has(k)) byCol.set(k, []);
+    byCol.get(k).push(t);
+  });
+  return [...byCol.values()];
+}
 
 // ---- Geometry: solving the canvas ----
 // All of this is pure arithmetic — no text measurement, no rendering — so searching ~65
@@ -305,7 +345,6 @@ function partition(source) {
     tiers,
     numbered,
     featured,
-    ranked: numbered.filter((t) => t !== featured),
     band: tiers.filter((t) => t !== featured && (t.layout !== "wall" || t.row !== undefined)),
     walls: tiers.filter((t) => t.layout === "wall" && t.row === undefined),
   };
@@ -313,14 +352,16 @@ function partition(source) {
 
 /** A band wall's own height: it is content-driven, not a share of the band */
 function bandWallPlan(tier, cols) {
-  const size = tier.size ?? WALL.sizes[0];
-  // Guarded here too, not just at the caller: a 0 or negative `cols` divides into Infinity rows.
+  // Both inputs are guarded here, not just at the callers, because both come straight out of
+  // data.mjs: a 0 or negative `cols:` divides into Infinity rows, and a 0 or negative `size:`
+  // makes every line box zero-or-negative tall, which shrinks the whole tier away.
+  const size = Math.max(1, tier.size ?? WALL.sizes[0]);
   const safeCols = Math.max(1, cols);
   const rows = Math.ceil(tier.items.length / safeCols);
   const rowH = Math.round(size * LINE);
   // Same border-box budget as the walls at the foot of the sheet: each row's 1px padding is
   // inside rowH, while the block's own padding-bottom and rule sit outside its auto height.
-  return { size, cols: safeCols, rows, rowH, height: HDR_H + 8 + rows * rowH + 10 };
+  return { size, cols: safeCols, rows, height: HDR_H + 8 + rows * rowH + 10 };
 }
 
 /**
@@ -364,31 +405,63 @@ function bandParts(p, bandH) {
   return { avail, featRowH: p.featured ? (avail - HDR_H) / p.featRows : 0 };
 }
 
+/**
+ * One band row's height at a given ranked unit: a rigid row keeps exactly what it asked for, and a
+ * flexible one takes its ranked cell's fixed-plus-growth or its wall cell's fixed need, whichever
+ * is taller. shape() judges the band's floor through this and derive() distributes the solved band
+ * through it, so the floor and the distribution are the same expression by construction. They were
+ * two hand-copies once, and the copies disagreed: derive() paid a wall-bound row twice and the
+ * band overflowed by the difference.
+ */
+const rowHeight = (r, unit) =>
+  r.rigid ? r.need : Math.max(r.wallFloor, r.fixed + r.demand * r.weight * unit);
+
 /** The band-height-dependent half of a plan, split out so the overflow path can redo it */
 function derive(p, bandH) {
   const { avail, featRowH } = bandParts(p, bandH);
   const plan = p.bandRowPlan ?? [];
   const gaps = Math.max(0, plan.length - 1) * DIV;
-  // Rigid rows keep exactly what they asked for. What's left is one shared unit, spent by every
-  // flexible row on its own weighted demand — the same single `unit` the sheet always divided its
-  // ranked tiers by, just read per row now that a row can hold more than one tier.
-  const unit =
-    p.weightedDemand > 0 ? Math.max(0, avail - p.fixedH - p.rigidH - gaps) / p.weightedDemand : 0;
-  return {
-    bandH,
-    featRowH,
-    unit,
-    // A flexible row is its ranked cell's own fixed-plus-growth, or its wall cell's fixed need,
-    // whichever is taller — the same `Math.max` shape() judged the floor by, now applied to the
-    // height the solved `unit` actually produces.
-    bandRowHeights: plan.map(
-      (r, i) =>
-        (r.rigid
-          ? r.need
-          : Math.max(r.wallFloor, r.fixed + Math.round(r.demand * r.weight * unit))) +
-        (i < plan.length - 1 ? DIV : 0),
-    ),
-  };
+
+  // Rows that cannot spend a share of the band are settled first and taken *out* of the pool: the
+  // rigid ones (all wall, nothing in them grows), and any flexible row whose wall cell's floor
+  // already beats the share the unit would hand it. Leaving one of those in the pool pays for its
+  // height twice — once as a share of the unit, once as the floor laid on top — and the rows then
+  // add up past the band, which the renderer settles by cutting content off the bottom.
+  //
+  // Which rows those are depends on the unit and the unit depends on which rows those are, so this
+  // iterates to a fixed point. Settling a row always lowers the unit (it removes more height from
+  // the pool than the share it was drawing), so a settled row never comes back: at most one pass
+  // per row, and in practice one or two.
+  const settled = new Set(plan.filter((r) => r.rigid));
+  let unit = 0;
+  for (let pass = 0; pass <= plan.length; pass++) {
+    // rowHeight(r, 0) is `need` for a rigid row and `wallFloor` for a wall-bound one — in both
+    // cases exactly the height that row is about to keep, whatever the unit ends up being.
+    const taken = plan.reduce((sum, r) => sum + (settled.has(r) ? rowHeight(r, 0) : 0), 0);
+    const fixed = plan.reduce((sum, r) => sum + (settled.has(r) ? 0 : r.fixed), 0);
+    const demand = plan.reduce((sum, r) => sum + (settled.has(r) ? 0 : r.demand * r.weight), 0);
+    unit = demand > 0 ? Math.max(0, avail - taken - fixed - gaps) / demand : 0;
+    const bound = plan.filter(
+      (r) => !settled.has(r) && r.wallFloor > r.fixed + r.demand * r.weight * unit,
+    );
+    if (bound.length === 0) break;
+    for (const r of bound) settled.add(r);
+  }
+
+  // Round on the running total rather than per row. The unrounded heights add up to `avail`
+  // exactly; rounding each one alone scatters up to half a pixel per row into (or out of) a band
+  // that has no way to absorb it, while carrying the remainder forward keeps the sum exact and
+  // still leaves every row within a pixel of its share. report() checks that sum — see
+  // bandResidue.
+  let drawn = 0;
+  let exact = 0;
+  const bandRowHeights = plan.map((r, i) => {
+    exact += rowHeight(r, unit);
+    const h = Math.round(exact) - drawn;
+    drawn += h;
+    return h + (i < plan.length - 1 ? DIV : 0);
+  });
+  return { bandH, featRowH, bandRowHeights };
 }
 
 /**
@@ -398,14 +471,25 @@ function derive(p, bandH) {
  * from this floor, and a fractional canvas height cannot be filled exactly.
  */
 function shape(p, cols) {
-  const colsOf = (t) => tierCols(t, cols);
-
   // A cell is one stack of tiers. Ranked stacks share whatever height the row gets; a wall stack
   // is worth exactly what its lines add up to, so it asks for that and no more.
-  const cellOf = (stack) => {
-    if (stack.every((t) => t.layout === "wall")) {
-      const walls = stack.map((t) => bandWallPlan(t, colsOf(t)));
-      return { stack, walls, need: walls.reduce((s, w) => s + w.height, 0) };
+  const cellOf = (stack, maxCols) => {
+    const colsOf = (t) => tierCols(t, cols, maxCols);
+    const walls = stack.filter((t) => t.layout === "wall");
+    if (walls.length === stack.length) {
+      const plans = stack.map((t) => bandWallPlan(t, colsOf(t)));
+      return { stack, walls: plans, need: plans.reduce((s, w) => s + w.height, 0) };
+    }
+    // A stack has one height and one way of spending it, so it cannot be half of each: a wall
+    // packs one line per item off its own `size:`, a ranked tier divides the row into numbered
+    // rows. Rejected rather than quietly coerced — the old code read the stack as ranked, which
+    // dropped the wall's `size:` and packing, gave it rank numbers, and moved the canvas.
+    if (walls.length > 0) {
+      throw new Error(
+        `banzuke data.mjs: the column: stack [${stack.map((t) => t.name).join(" + ")}] mixes a ` +
+          `"wall" tier with ranked ones. A stack has to be all wall or all ranked — give the ` +
+          'wall tier a column: of its own, or drop its layout: "wall".',
+      );
     }
     const rows = stack.map((t) => Math.ceil(t.items.length / colsOf(t)));
     const weights = stack.map((_, i) => TIER_WEIGHT ** (stack.length - 1 - i));
@@ -416,18 +500,15 @@ function shape(p, cols) {
 
   // Within a row, tiers sharing a `column:` stack inside one cell; the cells stand side by side.
   const built = p.bandRows.map((tiers) => {
-    const byCol = new Map();
-    tiers.forEach((t, i) => {
-      const k = t.column ?? `_${i}`;
-      if (!byCol.has(k)) byCol.set(k, []);
-      byCol.get(k).push(t);
-    });
-    const cells = [...byCol.values()].map(cellOf);
+    const stacks = rowCells(tiers);
+    // How many cells share this row is known before any column count is: `column:` groups them.
+    // That is what makes the width budget below solvable rather than circular.
+    const maxCols = cellColBudget(p.rightW, stacks.length);
+    const cells = stacks.map((stack) => cellOf(stack, maxCols));
     const rigid = cells.every((c) => c.walls);
     const ranked = cells.filter((c) => !c.walls);
     const walls = cells.filter((c) => c.walls);
     return {
-      tiers,
       cells,
       // A row of nothing but walls cannot use extra height, so it never takes a share of it.
       rigid,
@@ -452,34 +533,27 @@ function shape(p, cols) {
   // rung of the ladder either.
   const flexCount = built.filter((r) => !r.rigid).length;
   let seen = 0;
-  const rows = built.map((r) => {
+  const plan = built.map((r) => {
     if (r.rigid) return r;
     const weight = TIER_WEIGHT ** (flexCount - 1 - seen);
     seen += 1;
     return { ...r, weight };
   });
 
-  const rigidH = rows.reduce((s, r) => s + (r.rigid ? r.need : 0), 0);
-  const fixedH = rows.reduce((s, r) => s + (r.rigid ? 0 : r.fixed), 0);
-  const weightedDemand = rows.reduce((s, r) => s + (r.rigid ? 0 : r.demand * r.weight), 0);
-  // A flexible row's floor at the shared unit's own minimum (MIN_RANK_UNIT) — or its wall cell's
-  // fixed need, whichever is taller. Summed per row rather than folded into fixedH/weightedDemand
-  // above: a `Math.max` doesn't distribute over that sum, and a wall-heavy row's floor must only
-  // ever raise its own row, never eat into another row's share of the slack.
-  const rowFloors = rows.reduce(
-    (s, r) =>
-      s + (r.rigid ? 0 : Math.max(r.wallFloor, r.fixed + r.demand * r.weight * MIN_RANK_UNIT)),
-    0,
-  );
+  // The band's floor is every row at the shared unit's own minimum (MIN_RANK_UNIT), which is
+  // rowHeight's job — so a wall-heavy row contributes its wall's need and nothing more. Summed row
+  // by row rather than folded into one weighted total: a `Math.max` doesn't distribute over a sum,
+  // and a wall-bound row's floor must only ever raise its own row, never eat another row's share.
+  const rowFloors = plan.reduce((s, r) => s + rowHeight(r, MIN_RANK_UNIT), 0);
   const bandFloor =
     p.bandRule +
     Math.ceil(
       Math.max(
         p.featured ? HDR_H + p.featRows * FEAT_ROW_MIN : 0,
-        rows.length > 0 ? rigidH + rowFloors + Math.max(0, rows.length - 1) * DIV : 0,
+        plan.length > 0 ? rowFloors + Math.max(0, plan.length - 1) * DIV : 0,
       ),
     );
-  return { rankCols: cols, bandRowPlan: rows, rigidH, fixedH, weightedDemand, bandFloor };
+  return { rankCols: cols, bandRowPlan: plan, bandFloor };
 }
 
 /**
@@ -549,7 +623,7 @@ function resolveRankCols(p, bandOf) {
 }
 
 /** Lay the data out against one candidate sheet width and report whether it fits */
-function planAt(sheetW, { featured, ranked, walls, band }) {
+function planAt(sheetW, { featured, walls, band }) {
   const sheetH = Math.round(sheetW / ASPECT);
   const inner = sheetW - 2 * GROUND - 2 * BW;
   const innerH = sheetH - 2 * GROUND - 2 * BW;
@@ -569,7 +643,13 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
 
   const wallPlan = walls.map((tier, i) => {
     const size = WALL.sizes[Math.min(i, WALL.sizes.length - 1)];
-    const cols = wallCols(tier.items.length, size * WALL.em, inner);
+    // A foot wall spans the whole sheet, so it is its own single cell. `cols:` overrides the
+    // em-width split the same way it overrides the shared count in the band, under the same clamps.
+    const cols = tierCols(
+      tier,
+      wallCols(tier.items.length, size * WALL.em, inner),
+      cellColBudget(inner, 1),
+    );
     const rows = Math.ceil(tier.items.length / cols);
     const rowH = Math.round(size * LINE);
     // A wall tier is the sheet's one auto-height box, so its padding and bottom rule *do* add on
@@ -590,8 +670,6 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
     wallPlan,
     wallsH,
     featured,
-    ranked,
-    walls,
     featRows,
     bandRows: bandRows(band),
     // Only the featured layout wraps the band in a box of its own, and that box's bottom rule is
@@ -608,8 +686,20 @@ function planAt(sheetW, { featured, ranked, walls, band }) {
   const cols = resolveRankCols(base, () => bandH);
   const p = { ...base, ...shape(base, cols) };
 
+  // Cells split their row's width between them, so a row holding more cells than `rightW` can give
+  // MIN_COL_W each has no legible arrangement at this canvas however the columns are dealt. That is
+  // a width problem, and this sheet answers width problems by getting wider — so it counts as a
+  // miss and the search moves on, the same as missing the band's height floor.
+  const crowded = base.bandRows.filter((tiers) => rowCells(tiers).length * MIN_COL_W > rightW);
+
   // A candidate width that cannot clear the band's legibility floor does not fit.
-  return { ...p, ...derive(p, bandH), fits: bandH >= p.bandFloor, clamped: false };
+  return {
+    ...p,
+    ...derive(p, bandH),
+    crowded,
+    fits: bandH >= p.bandFloor && crowded.length === 0,
+    clamped: false,
+  };
 }
 
 /**
@@ -655,6 +745,22 @@ export function geometry(source = data) {
     plan = planAt(w, parts);
     if (plan.fits) return { ...plan, cropRisk: false };
   }
+  // Overflow can rescue a band that is too *short* — it just lets the sheet run taller. It cannot
+  // rescue one that is too *narrow*: the widest canvas is already on the table. Say so here, where
+  // the row and the remedy are both still in hand, rather than letting the sheet get all the way
+  // into fitSpan and die there on a negative width with nothing but a title to point at.
+  if (plan.crowded.length > 0) {
+    const [tiers] = plan.crowded;
+    const names = rowCells(tiers)
+      .map((stack) => stack.map((t) => t.name).join(" + "))
+      .join(" | ");
+    throw new Error(
+      `banzuke data.mjs: band row [${names}] stands ${rowCells(tiers).length} cells side by side, ` +
+        `which leaves under ${MIN_COL_W}px a column even at the ${MAX_W}px maximum width. Give ` +
+        "some of those tiers the same column: so they stack instead, move one to another row:, " +
+        "or raise MAX_W.",
+    );
+  }
   const over = overflow(plan);
   return { ...over, cropRisk: over.sheetW / over.sheetH < SAFE_ASPECT };
 }
@@ -681,15 +787,18 @@ const featuredRamp = (g) => (g.featured ? tierSizes("featured", g.featRowH, g.fe
  * Walks the band the way groupColumns() draws it — per row, per cell, per tier in its stack —
  * recomputing only the same rowH/unit/height arithmetic and feeding it to the same tierSizes() call
  * rankedTier() makes. The ladder and the slack/fill report both read off this once, so neither can
- * independently drift from what sheet() actually draws (see task-3-report.md for what that drift
- * cost before the per-cell cap existed).
+ * independently drift from what sheet() actually draws.
+ *
+ * Each entry carries its `row` index, because where a cell sits decides what it may be compared
+ * with: rows stack, cells within a row stand side by side.
  */
 function bandCells(g) {
   const featLast = featuredRamp(g)?.at(-1) ?? Number.POSITIVE_INFINITY;
   return g.bandRowPlan.flatMap((row, ri) => {
     const lastRow = ri === g.bandRowPlan.length - 1;
     const rowH = g.bandRowHeights[ri] - (lastRow ? 0 : DIV);
-    return row.cells.map((cell) => {
+    const maxCols = cellColBudget(g.rightW, row.cells.length);
+    return row.cells.map((cell, ci) => {
       if (cell.walls) {
         // A wall types itself off its own `size:`, flat top to bottom, and never stretches to fill
         // the row — so it has a ladder rung but no meaningful fill (see slackOf below).
@@ -699,7 +808,7 @@ function bandCells(g) {
           to: cell.walls[j].size,
           fill: null,
         }));
-        return { cell, got: rowH, tiers };
+        return { cell, row: ri, beside: ci > 0, got: rowH, tiers };
       }
       const unit = (rowH - cell.fixed) / cell.weighted;
       const tiers = cell.stack.map((tier, j) => {
@@ -717,23 +826,56 @@ function bandCells(g) {
           from: sizes[0],
           to: sizes.at(-1),
           fill: (sizes[0] * LINE) / rowBoxH,
-          cols: tierCols(tier, g.rankCols),
+          cols: tierCols(tier, g.rankCols, maxCols),
         };
       });
-      return { cell, got: rowH, tiers };
+      return { cell, row: ri, beside: ci > 0, got: rowH, tiers };
     });
   });
 }
 
-/** One rung per tier that draws text, top to bottom: featured, the band cells in draw order, then
- *  the foot walls — the same order sheet() lays them out in. */
+/**
+ * One rung per tier that draws text, top to bottom: featured, the band cells in draw order, then
+ * the foot walls — the same order sheet() lays them out in.
+ *
+ * The band is a grid, not a chain, so the order alone does not say what a rung may be measured
+ * against. Each rung carries `above`: the size it genuinely sits under on the sheet. Within a
+ * stack that is the tier above it. For the top of a cell it is the whole row above — a band row
+ * spans the full width, so its smallest type is what the next row down has to stay under — or, in
+ * the first row, the featured column's last line, the bound every ranked tier owes. A foot wall
+ * sits under the entire band, so it answers to the last band row the same way.
+ *
+ * `beside` marks a rung that stands *next* to the one printed before it rather than under it. Two
+ * cells in a row are side by side and comparing their sizes says nothing at all, which is what the
+ * old flat chain did — and it reported an inversion on every correct two-cell sheet.
+ */
 function ladderOf(g) {
   const feat = featuredRamp(g);
-  const ladder = feat ? [{ name: g.featured.name, from: feat[0], to: feat.at(-1) }] : [];
-  for (const { tiers } of bandCells(g)) {
-    for (const t of tiers) ladder.push({ name: t.tier.name, from: t.from, to: t.to });
+  const featLast = feat?.at(-1) ?? null;
+  const ladder = feat
+    ? [{ name: g.featured.name, from: feat[0], to: feat.at(-1), above: null, beside: false }]
+    : [];
+  const cells = bandCells(g);
+  const rowFloor = (ri) => {
+    const inRow = cells.filter((c) => c.row === ri).flatMap((c) => c.tiers.map((t) => t.to));
+    return inRow.length > 0 ? Math.min(...inRow) : featLast;
+  };
+  for (const { row, beside, tiers } of cells) {
+    tiers.forEach((t, j) => {
+      ladder.push({
+        name: t.tier.name,
+        from: t.from,
+        to: t.to,
+        above: j > 0 ? tiers[j - 1].to : row > 0 ? rowFloor(row - 1) : featLast,
+        beside: beside && j === 0,
+      });
+    });
   }
-  for (const w of g.wallPlan) ladder.push({ name: w.tier.name, from: w.size, to: w.size });
+  let above = g.bandRowPlan.length > 0 ? rowFloor(g.bandRowPlan.length - 1) : featLast;
+  for (const w of g.wallPlan) {
+    ladder.push({ name: w.tier.name, from: w.size, to: w.size, above, beside: false });
+    above = w.size;
+  }
   return ladder;
 }
 
@@ -776,8 +918,26 @@ function slackOf(g) {
 }
 
 // A cell's type filling less than this share of its row's line box reads as bare paper rather than
-// a deliberate small tier — see slackOf's doc comment for the measured split (0.775 vs 0.144–0.288).
+// a deliberate small tier. Measured across the family of shapes this was tuned on, a healthy cell
+// fills about 0.78 of its line box and a starved one 0.14–0.29, so 0.3 splits them with room to
+// spare on both sides.
 const STARVED_FILL = 0.3;
+
+// Slack under this is the rounding left over from dealing a band out in whole pixels, not a gap
+// anyone can see, so it is not worth a line of report.
+const SLACK_PX = 20;
+
+/**
+ * The band's rows against the band itself. Their heights are dealt from exactly what the band has
+ * to give (`bandH`, less the band's own rule), so the two should agree to the pixel. Positive means
+ * the rows add up past their box and takumi settles it by cutting whatever falls off the bottom;
+ * negative means blank paper inside the band that no row claims — a rigid wall row is the usual
+ * cause, since it cannot grow into the slack and nothing else in the band can take it either.
+ *
+ * Worth checking rather than eyeballing: neither shows up in a canvas-fill check (the sheet still
+ * measures exactly `sheetH`), and geometry() reports finite, plausible numbers through both.
+ */
+const bandResidue = (g) => g.bandRowHeights.reduce((sum, h) => sum + h, 0) - (g.bandH - g.bandRule);
 
 /**
  * Score a candidate layout. Ink coverage is the one number that answers "is this denser?" — the
@@ -792,7 +952,11 @@ export async function report() {
   for (const m of html.matchAll(SPAN)) {
     const [, size, weight, family, ls, scale, text] = m;
     if (!text.trim()) continue;
-    const w = await measureWidth(text, {
+    // The span holds esc()'d text, so what is captured here is HTML-escaped: an "&" reads as the
+    // five glyphs of "&amp;". takumi decodes it back before drawing (see lib/entities.mjs), so
+    // measuring the escaped form counts ink the sheet never puts down — a title full of ampersands
+    // scored half again as much as it draws.
+    const w = await measureWidth(decodeHtmlEntities(text), {
       size: Number(size),
       weight: Number(weight),
       family,
@@ -812,17 +976,28 @@ export async function report() {
     coverage: ink / (g.sheetW * g.sheetH),
     ladder: ladderOf(g),
     slack: slackOf(g),
+    bandResidue: bandResidue(g),
     squeeze,
   };
 }
 
-/** `name from→to`, chained by ` > ` — marked `!>` where a rung types bigger than the one above it,
- *  the inversion the hierarchy bound and the per-cell cap both exist to prevent. */
+/**
+ * `name from→to`, joined by ` > ` where the rung sits under the previous one and ` | ` where it
+ * stands beside it in the same band row. `!>` marks a rung typing bigger than what is genuinely
+ * above it (`above` in ladderOf) — the inversion the hierarchy bound and the per-cell cap both
+ * exist to prevent. A new cell that inverts prints both: ` | !> `.
+ */
 function formatLadder(ladder) {
   return ladder
     .map((rung, i) => {
-      const prev = ladder[i - 1];
-      const joiner = i === 0 ? "" : prev.to < rung.from ? " !> " : " > ";
+      // `beside` picks the separator — `|` for a cell to the right, `>` for anything below — and
+      // `!>` stands in for `>` (and follows `|`) wherever the rung out-types what is above it.
+      const inverted = rung.above !== null && rung.above < rung.from;
+      const marks = [];
+      if (i > 0 && rung.beside) marks.push("|");
+      if (i > 0 && inverted) marks.push("!>");
+      else if (i > 0 && !rung.beside) marks.push(">");
+      const joiner = marks.length > 0 ? ` ${marks.join(" ")} ` : "";
       return `${joiner}${rung.name} ${rung.from}→${rung.to}`;
     })
     .join("");
@@ -873,12 +1048,6 @@ export async function sheet() {
     letterSpacing: -0.72,
   });
 
-  // The band's right side: one box per row, stacked. Within a row the tiers stand side by side,
-  // sharing the width in proportion to how many columns each one asked for — the same `tierCols`
-  // the geometry divided their heights by, so the width this loop hands out and the columns
-  // `rankedTier` actually draws cannot drift apart.
-  const colsOf = (t) => tierCols(t, g.rankCols);
-
   // The featured column's own sizes, needed before the band because the band is typed against
   // them: its last row is the largest any ranked title is allowed to be. Read from the ramp that
   // is actually drawn rather than re-derived from the knobs, so the two cannot round apart by the
@@ -900,7 +1069,14 @@ export async function sheet() {
           // below (cell widths, the ranked unit) works off what the rule leaves behind.
           const boxH = g.bandRowHeights[ri];
           const rowH = boxH - (lastRow ? 0 : DIV);
-          const weightOf = (c) => c.stack.reduce((sum, t) => sum + colsOf(t), 0);
+          // The row's cells share its width in proportion to how many columns each one draws — the
+          // same `tierCols` the geometry divided their heights by (down to the same per-row budget),
+          // so the width dealt here and the columns `rankedTier` draws cannot come apart.
+          const colsOf = (t) => tierCols(t, g.rankCols, cellColBudget(g.rightW, r.cells.length));
+          // A stack's own demand is the *widest* of its tiers, not their total: every tier in a
+          // stack is drawn at the full cell width with its own `cols:`, one under the other, so
+          // three single-column tiers stacked still only need one column's worth of width.
+          const weightOf = (c) => Math.max(...c.stack.map(colsOf));
           const totalCols = r.cells.reduce((sum, c) => sum + weightOf(c), 0);
           let used = 0;
           const cells = await Promise.all(
@@ -946,8 +1122,9 @@ export async function sheet() {
               return `<div style="width:${w}px;flex:none;display:flex;flex-direction:column;${cellRule}">${blocks.join("")}</div>`;
             }),
           );
-          // A wall row is exactly as tall as its lines, so the slack has to go to a row that can
-          // use it: the last row, whose cells share the band by weight instead of a fixed need.
+          // The rule between two rows belongs to the upper one, and border-box puts it inside the
+          // declared height (boxH already carries it — see derive()), so drawing it costs the row's
+          // content nothing. The last row has nothing under it to be separated from.
           const rowRule = lastRow ? "" : `border-bottom:${DIV}px solid ${T.ink};`;
           const sizing = `height:${boxH}px;flex:none;${rowRule}`;
           return `<div style="${sizing}display:flex;min-height:0">${cells.join("")}</div>`;
@@ -1032,7 +1209,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     );
     console.log(`coverage: ${(r.coverage * 100).toFixed(1)}% of the canvas is ink`);
     console.log(`ladder: ${formatLadder(r.ladder)}`);
-    for (const cell of r.slack.filter((c) => c.slack > 20)) {
+    if (r.bandResidue > 0) {
+      console.log(
+        `band: the rows add up to ${r.bandResidue}px MORE than the band holds — whatever falls ` +
+          "past the bottom is being cut off. This is a bug in the height math, not a knob.",
+      );
+    } else if (r.bandResidue < 0) {
+      console.log(
+        `band: ${-r.bandResidue}px of the band is blank paper no row claims — a rigid wall row ` +
+          "cannot grow into it and nothing else in the band can take it. Move a ranked tier into " +
+          "that row, or give the wall more items.",
+      );
+    }
+    for (const cell of r.slack.filter((c) => c.slack > SLACK_PX)) {
       console.log(
         `slack: "${cell.name}" got ${cell.got}px against a ${cell.need}px need ` +
           `(+${cell.slack}px unused)`,

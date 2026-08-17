@@ -200,6 +200,12 @@ rewrite: `row:` puts tiers side by side, `column:` stacks them inside one cell, 
 tier into more columns, and a `layout: "wall"` tier carrying a `row:` moves into the band with the
 wall's own packing — no rules between rows, no per-row floor, one line per item.
 
+Two rules the arrangement has to keep, both of which fail loudly with a message rather than
+quietly: a `column:` stack is all wall or all ranked (one cell cannot pack lines and draw numbered
+rows at once), and a row's cells each need real width, so a row of many cells makes the sheet
+widen and eventually runs out of canvas. The `row:` and `column:` numbers group tiers; they do not
+order them — the order is the order the tiers appear in `data.mjs`.
+
 So when a sheet is dense enough to be interesting, **do not polish the first arrangement**.
 Produce three to five that differ *structurally* — which tiers share a row, which layout a long
 tier uses, how many columns it deals into — score each with `node banzuke.mjs --report`, then
@@ -209,8 +215,16 @@ open the winner as an image and walk the checklist above. `--report` prints, in 
   target ratio (`clamped`) or came out genuinely croppable (`cropRisk`)
 - **coverage** — ink area over sheet area. The answer to "is this denser?", and not something the
   eye can judge from a thumbnail
-- **ladder** — every tier's first→last type size, top to bottom in draw order, marked `!>` where
-  a rung types bigger than the one above it — the inversion the hierarchy bound exists to prevent
+- **ladder** — every tier's first→last type size, top to bottom in draw order. ` > ` joins a tier
+  to the one it sits *under*; ` | ` marks a tier standing *beside* the previous one in the same
+  band row, where the two sizes have nothing to say about each other. `!>` flags a tier typing
+  bigger than what is genuinely above it — the featured column's last row for the top of a cell,
+  the row above for a lower row, the last band row for a foot wall — the inversion the hierarchy
+  bound exists to prevent
+- **band** — printed only when the band's rows do not add up to the band itself. Over means rows
+  are running past their box and content is being cut off (a bug, not a knob); under means blank
+  paper no row claims, which happens when every row in the band is a wall and none of them can
+  grow. Put a ranked tier in one of those rows, or accept the gap
 - **slack** — a band cell whose content falls short of its row. Only a wall cell in the band can
   have slack; a ranked cell always stretches to fill its row, so it never does
 - **starved** — a cell whose drawn type fills less than 30% of its row's line box: numerically
@@ -223,13 +237,19 @@ open the winner as an image and walk the checklist above. `--report` prints, in 
 
 Levers worth knowing before you start guessing:
 
-- **A long tier is cheap as a band wall and expensive as ranked.** A ranked row can't go below
-  `MIN_RANK_UNIT`, so 96 titles in a single ranked column cost over 2000px against roughly 600px
-  for the same 96 as a `layout: "wall"` tier carrying a `row:`. Promoting a long tail tier into
-  the band is usually only affordable as a wall
+- **Columns are the big lever; the wall layout is a smaller one.** Holding the column count fixed,
+  96 titles need 2136px of band in one ranked column and 1578px as a `layout: "wall"` tier in one
+  column — 1.35×, because a ranked row's floor is `MIN_RANK_UNIT` (22px) while a wall line is just
+  `size × LINE` (~16px at the default). The same 96 at three columns is 728px ranked against 554px
+  as a wall, the same ratio. What moves the number by 3× or more is the *columns*: those same 96 as
+  a wall pinned to `cols: 6` cost 298px. So reach for `cols:` first — and note that a band wall
+  without its own `cols:` shares the sheet's count and is capped by `RANK_COLS_MAX` just like a
+  ranked tier, so promoting a tail tier to a wall does little on its own. What the wall really buys
+  is that its columns are cheap (no rank cell, no per-row floor) and its `size:` is a direct lever
 - **Compressing the biggest tiers does not raise density.** Most of the characters live there, so
-  shrinking them lowers the average even as it frees height. Measured on a 388-title sheet at a
-  fixed width: coverage went from 27.8% to 25.5%
+  shrinking them lowers the average even as it frees height. Measured on a 388-title sheet with
+  `MIN_W` pinned to `MAX_W`: dropping `WALL.sizes` from `[13, 11, 9.5]` to `[9, 8, 7]` took
+  coverage from 21.1% to 16.9%
 - **The solver takes the narrowest fitting width**, so freeing height shrinks the whole sheet
   rather than handing the band more room. Pin `MIN_W` to `MAX_W` when the freed space should go
   to the band instead
