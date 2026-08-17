@@ -202,6 +202,30 @@ test("walls-only data renders a sheet with no rank numbers", async () => {
   assert.match(html, />3 titles</);
 });
 
+// With neither a featured nor a ranked tier, nothing else in the sheet claims the geometry's
+// reserved band height. On a canvas pinned to a fixed height (rather than one that grows with the
+// content) an unclaimed band shows up as a real blank stripe, stranding the footer partway up the
+// sheet instead of pinning it to the bottom — the walls-only and fully-empty cases above render
+// distinct HTML either way, so those assertions alone would not have caught it.
+test("a sheet with no featured and no ranked tier still fills the canvas", async () => {
+  const wallsOnly = {
+    title: "T",
+    unit: "titles",
+    tiers: [tier("Wall A", "wall", ["a", "b"]), tier("Wall B", "wall", ["c"])],
+  };
+  const empty = { title: "T", unit: "titles", tiers: [] };
+  for (const data of [wallsOnly, empty]) {
+    const html = await sheetFor(`layout-fill-${data.tiers.length}`, data);
+    // Whatever sits between the masthead and the footer has to be able to grow into the leftover
+    // space, or a fixed-height box there leaves the reserve unrendered.
+    assert.match(
+      html,
+      /<div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0">/,
+      `expected a flex box able to absorb the band height for ${JSON.stringify(data.tiers.length)} wall tier(s)`,
+    );
+  }
+});
+
 test("single-item tiers render (the flat size ramp)", async () => {
   const html = await sheetFor("layout-single", {
     title: "T",

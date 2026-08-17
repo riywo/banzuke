@@ -495,6 +495,16 @@ export async function sheet() {
     g.wallPlan.map((w) => wallTier(w.tier, w.size, w.cols, g.inner)),
   );
 
+  // With neither a featured nor a ranked tier, nothing above claims g.bandH — band is "". On a
+  // canvas pinned to a fixed height that would otherwise show up as a blank stripe below the
+  // walls, stranding the footer partway up the sheet instead of at the bottom. Let the walls (or,
+  // for a wholly empty sheet, nothing at all) grow to fill that space and center in it instead, so
+  // the leftover reads as intentional breathing room rather than a layout bug.
+  const wallsBlock =
+    numbered.length === 0
+      ? `<div style="flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0">${wallBlocks.join("")}</div>`
+      : wallBlocks.join("");
+
   return `<div style="width:${g.sheetW}px;height:${g.sheetH}px;display:flex;background:${T.ground};padding:${GROUND}px;font-family:'${T.font}';color:${T.ink}">
   <div style="flex:1;border:${BW}px solid ${T.ink};background:${T.bg};display:flex;flex-direction:column">
     <div style="height:${MAST_H}px;flex:none;display:flex;border-bottom:${BW}px solid ${T.ink}">
@@ -509,7 +519,7 @@ export async function sheet() {
       </div>
     </div>
     ${band}
-    ${wallBlocks.join("")}
+    ${wallsBlock}
     <div style="height:${FOOT_H}px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:${T.weight};letter-spacing:2.2px;color:${T.muted}">banzuke</div>
   </div>
 </div>`;
