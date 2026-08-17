@@ -28,6 +28,7 @@ my-banzuke/
   banzuke.mjs                        sheet design + entry point (edit this)
   lib/                               rendering engine (bundled copy; modify it if you need to)
   banzuke.html / banzuke.png         output
+  README.md                          embeds banzuke.png (repo landing page / GitHub Pages index)
 ```
 
 - The user stores it however they like: git / zip / just a folder / Google Drive. Anywhere with
@@ -82,6 +83,20 @@ Below, `$BANZUKE` = the directory containing this SKILL.md.
    HTML, not the console output) and walk the whole checklist below against what you see
 5. Fix and re-run. Visual fixes normally mean the "tuning knobs" block at the top of `banzuke.mjs`.
    Expect at least one round of this: a first sheet that needs no correction is rare
+6. **Write a `README.md`** in the project directory (new projects only — it never needs updating,
+   the image path stays the same across re-renders). It holds the sheet and nothing else:
+
+   ```markdown
+   # <the banzuke's title>
+
+   ![<the banzuke's title>](banzuke.png)
+   ```
+
+   No build notes, no data dump, no install instructions — just the heading and the image, so that
+   the sheet *is* the page. GitHub renders it on the repo's landing page, and GitHub Pages serving
+   the branch root has no `index.html` to prefer, so it renders the same README as the site's top
+   page. Both rely on the relative `banzuke.png` sitting next to the README, and on the PNG being
+   committed — the template's `.gitignore` covers only `node_modules/`, so leave it that way
 
 ## Building banzuke data from a list of hundreds (triage UI)
 
