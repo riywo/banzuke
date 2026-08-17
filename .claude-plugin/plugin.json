@@ -1,7 +1,7 @@
 {
   "name": "banzuke",
   "displayName": "banzuke",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An Agent Skill that generates and updates banzuke (tier-list ranking) PNG images. Scaffolds a self-contained node project, then edits the data/code and re-renders it without a browser.",
   "author": {
     "name": "Ryosuke Iwanaga",
