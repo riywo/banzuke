@@ -148,14 +148,16 @@ test("template ships with its lock and package.json", () => {
 
 test("the bun and deno locks pin the same takumi as the npm one", () => {
   // One manifest, three locks: bun migrates package-lock.json only when bun.lock is absent, and
-  // deno ignores it entirely, so nothing but `npm run locks` keeps them in step. Substring rather
-  // than JSON.parse: bun.lock is JSONC (trailing commas), which JSON.parse rejects.
+  // deno ignores it entirely, so nothing but `npm run locks` keeps them in step.
   const version = JSON.parse(templateFile("package-lock.json")).packages["node_modules/takumi-js"]
     .version;
-  for (const lock of ["bun.lock", "deno.lock"]) {
+  // Read through each runtime's own `pins`, which is what scripts/locks.mjs diffs the regenerated
+  // locks with. A reader that stops finding anything makes that gate vacuous — two empty lists
+  // are equal — so it has to be a reader, not a substring, that answers here.
+  for (const [name, runtime] of Object.entries(RUNTIMES)) {
     assert.ok(
-      templateFile(lock).includes(`takumi-js@${version}`),
-      `${lock} does not pin ${version}`,
+      runtime.pins(templateFile(runtime.lock)).includes(`takumi-js@${version}`),
+      `${name}: ${runtime.lock} does not pin takumi-js@${version}`,
     );
   }
 });
