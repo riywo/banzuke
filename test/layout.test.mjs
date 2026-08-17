@@ -1247,17 +1247,68 @@ test("--report: coverage rises when the same data is set larger", async () => {
   );
 });
 
-// The regex report() reads spans through requires the transform group literally, but fitSpan only
+// The regex report() reads spans through required the transform group literally, but fitSpan only
 // emits `transform:scaleX(…)` when the scale isn't 1 — the common case for text that fits without
 // squashing or stretching, the masthead title included. A regex that required the group therefore
 // silently dropped exactly that span's ink on every sheet (measured: SPARSE undercounted coverage by
-// 18.3%, always losing the title). Pinning "matched == present" rather than a coverage number means
-// a future change to fitSpan's own output can't quietly reopen the gap without this failing, whatever
-// the coverage math around it does.
-test("--report: coverage accounts for every fitSpan, not just the squeezed or stretched ones", async () => {
-  // Mirrors banzuke.mjs's own SPAN regex (with the optional transform group the fix restores).
-  const SPAN =
-    /<span style="[^"]*?font-size:([\d.]+)px;font-weight:(\d+);font-family:'([^']+)';letter-spacing:([-\d.]+)px;(?:transform:scaleX\(([\d.]+)\);)?">([^<]*)<\/span>/g;
+// 18.3%, always losing the title).
+//
+// A first version of this test mirrored banzuke.mjs's own SPAN regex locally and matched *that copy*
+// against the HTML — which only proves the copy agrees with itself. Reverting the fix in banzuke.mjs
+// left that test green: it never called report() and never touched the real SPAN constant, so it
+// could not see the real bug it was written for. This version calls report() itself and checks its
+// output against a parser built a different way (splitting each span's style attribute into a
+// property map rather than matching one fixed-order pattern), so a bug in *either* parser — the
+// implementation's regex or a future rewrite of it — has to show up as a disagreement between the
+// two, not as two copies of the same mistake agreeing.
+//
+// `measureWidth` here must come from the *same* scaffolded copy `report()` runs in, not the
+// top-level import: takumi's renderer is a singleton per module instance (see `getRenderer()`), and
+// two independently-imported copies of lib/index.mjs measured the same (text, size, weight, family)
+// a few px apart in practice — a real quirk of the underlying renderer, not a bug in either parser,
+// but enough to make a naive cross-instance comparison flaky. Importing lib/index.mjs from the exact
+// same scaffolded directory keeps the comparison apples to apples.
+async function independentSpanScore(html, sheetW, sheetH, measureWidth) {
+  let ink = 0;
+  let squeeze = 0;
+  for (const m of html.matchAll(/<span style="([^"]*)">([^<]*)<\/span>/g)) {
+    const [, style, text] = m;
+    if (!text.trim()) continue;
+    const props = Object.fromEntries(
+      style
+        .split(";")
+        .filter(Boolean)
+        .map((decl) => {
+          const i = decl.indexOf(":");
+          return [decl.slice(0, i).trim(), decl.slice(i + 1).trim()];
+        }),
+    );
+    const size = Number.parseFloat(props["font-size"]);
+    const weight = Number(props["font-weight"]);
+    const family = props["font-family"]?.replace(/^'|'$/g, "");
+    const letterSpacing = Number.parseFloat(props["letter-spacing"] ?? "0");
+    // No transform declaration at all means the span drew at its natural width — scale 1, the exact
+    // case the bug dropped.
+    const scale = Number(props.transform?.match(/scaleX\(([\d.]+)\)/)?.[1] ?? 1);
+    const w = await measureWidth(text, { size, weight, family, letterSpacing });
+    ink += w * scale * size;
+    if (scale < 1) squeeze += 1;
+  }
+  return { coverage: ink / (sheetW * sheetH), squeeze };
+}
+
+/** Like templateFor, but also hands back the scaffolded copy's own measureWidth — see
+ *  independentSpanScore's doc comment for why a test that re-measures text needs it. */
+async function templateForWithMeasure(name, data) {
+  const dir = scaffold(name, data);
+  const [banzuke, lib] = await Promise.all([
+    import(pathToFileURL(path.join(dir, "banzuke.mjs")).href),
+    import(pathToFileURL(path.join(dir, "lib/index.mjs")).href),
+  ]);
+  return { ...banzuke, measureWidth: lib.measureWidth };
+}
+
+test("--report: coverage and squeeze match an independently parsed count of every span", async () => {
   for (const [name, data] of [
     ["shipped", undefined],
     ["grid", GRID],
@@ -1265,16 +1316,85 @@ test("--report: coverage accounts for every fitSpan, not just the squeezed or st
     ["sparse", SPARSE],
     ["dense", DENSE],
   ]) {
-    const { sheet } = await templateFor(`report-span-count-${name}`, data);
+    const { report, sheet, geometry, measureWidth } = await templateForWithMeasure(
+      `report-span-check-${name}`,
+      data,
+    );
+    const r = await report();
     const html = await sheet();
-    const spanTags = [...html.matchAll(/<span /g)].length;
-    const spanMatches = [...html.matchAll(SPAN)].length;
+    const g = geometry();
+    const independent = await independentSpanScore(html, g.sheetW, g.sheetH, measureWidth);
     assert.equal(
-      spanMatches,
-      spanTags,
-      `${name}: SPAN matched ${spanMatches} of ${spanTags} <span> elements in the sheet`,
+      r.coverage,
+      independent.coverage,
+      `${name}: report() coverage ${r.coverage} vs independently parsed ${independent.coverage}`,
+    );
+    assert.equal(
+      r.squeeze,
+      independent.squeeze,
+      `${name}: report() squeeze ${r.squeeze} vs independently parsed ${independent.squeeze}`,
     );
   }
+});
+
+// squeeze was only ever spot-checked at 0 until now. DENSE and BIG_FEATURED are already two of the
+// five datasets the independent-parser test above cross-checks, so their squeeze counts are already
+// verified against a second, non-implementation-sharing parser — but measured, both come out 0: their
+// item names are short synthetic strings ("f12", "r3-7") that a ranked/wall column stretches (or
+// leaves alone) rather than ever needing to shrink, so asserting squeeze > 0 there would assert
+// something false about the fixtures, not close a real gap. What "known to be non-trivially correct"
+// actually needs is a sheet where genuine squeezing happens — reusing the long-title fixture the
+// squeeze mechanism itself is tested against elsewhere in this file — checked the same
+// independent-parser way as above, not just eyeballed as non-zero.
+const SQUEEZE_HEAVY = {
+  title: "T",
+  unit: "titles",
+  tiers: [
+    {
+      name: "Featured",
+      layout: "featured",
+      items: [
+        "The Extraordinarily Long Name of a Show That Simply Refuses To End, Part One",
+        "The Extraordinarily Long Name of a Show That Simply Refuses To End, Part Two",
+        "f3",
+        "f4",
+      ],
+      color: "#d62828",
+    },
+    {
+      name: "Ranked A",
+      layout: "ranked",
+      items: [
+        "The Extraordinarily Long Name of a Show That Simply Refuses To End, Part Three: Electric Boogaloo",
+        ...bulk("a", 9),
+      ],
+    },
+    {
+      name: "Wall",
+      layout: "wall",
+      items: [
+        "The Extraordinarily Long Name of a Show That Simply Refuses To End, Part Four: The Reckoning",
+        ...bulk("w", 50),
+      ],
+    },
+  ],
+};
+
+test("--report: squeeze counts real squashed titles, verified against an independent parse (not just non-zero)", async () => {
+  const { report, sheet, geometry, measureWidth } = await templateForWithMeasure(
+    "report-squeeze-heavy",
+    SQUEEZE_HEAVY,
+  );
+  const r = await report();
+  assert.ok(r.squeeze > 0, `expected some squeezed titles, got ${r.squeeze}`);
+  const html = await sheet();
+  const g = geometry();
+  const independent = await independentSpanScore(html, g.sheetW, g.sheetH, measureWidth);
+  assert.equal(
+    r.squeeze,
+    independent.squeeze,
+    `report() squeeze ${r.squeeze} vs independently parsed ${independent.squeeze}`,
+  );
 });
 
 // A cell can be full by height and still mostly bare paper by type: a small tier sharing a row with
