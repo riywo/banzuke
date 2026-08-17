@@ -624,6 +624,21 @@ test("band grid: a wall in the band is far cheaper than the same tier ranked", a
   );
 });
 
+// A wall cell cannot grow with the rest of its row, so its height has to be reserved rather than
+// shared — the row GRID's own "C" wall shares with the "A"/"B" ranked stack is exactly this case.
+// Missing this let a mixed row size itself off the ranked cell alone and clip the wall beside it.
+test("band grid: a flexible row is never shorter than the wall cell it holds", async () => {
+  const { geometry } = await templateFor("grid-wall-floor", GRID);
+  const g = geometry();
+  const row = g.bandRowPlan[0];
+  const wallCell = row.cells.find((c) => c.walls);
+  const wallNeed = wallCell.walls.reduce((sum, w) => sum + w.height, 0);
+  assert.ok(
+    g.bandRowHeights[0] >= wallNeed,
+    `row height (${g.bandRowHeights[0]}) must clear its wall cell's need (${wallNeed})`,
+  );
+});
+
 test("band grid: with no `row:` anywhere, the band is one tier per row as before", async () => {
   const { geometry } = await templateFor("grid-default", SPARSE);
   const g = geometry();
@@ -653,4 +668,24 @@ test("band grid: with no `row:` anywhere, an earlier tier still reads taller tha
     `the earlier, smaller tier (${g.bandRowHeights[0]}px) should still outsize the later, ` +
       `bigger one (${g.bandRowHeights[1]}px)`,
   );
+});
+
+// `t.cols` is honored (colsOf) now that a tier can pick its own column count, so a stray `0` or
+// negative value in data.mjs is newly reachable here — and `n / 0` is Infinity, not a thrown error,
+// so it would otherwise surface as a silently broken canvas rather than a clear failure.
+test("band grid: a nonsense `cols:` still yields a finite canvas", async () => {
+  const { geometry } = await templateFor("grid-cols-zero", {
+    title: "T",
+    unit: "titles",
+    tiers: [
+      { name: "Featured", layout: "featured", items: bulk("f", 4), color: "#d62828" },
+      { name: "Zero cols", layout: "ranked", items: bulk("a", 8), cols: 0 },
+      { name: "Negative cols", layout: "wall", items: bulk("b", 12), row: 1, cols: -3 },
+    ],
+  });
+  const g = geometry();
+  assert.ok(Number.isFinite(g.sheetH), `sheetH must be finite, got ${g.sheetH}`);
+  for (const h of g.bandRowHeights) {
+    assert.ok(Number.isFinite(h), `every band row height must be finite, got ${h}`);
+  }
 });

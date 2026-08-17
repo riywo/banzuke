@@ -281,11 +281,13 @@ function partition(source) {
 /** A band wall's own height: it is content-driven, not a share of the band */
 function bandWallPlan(tier, cols) {
   const size = tier.size ?? WALL.sizes[0];
-  const rows = Math.ceil(tier.items.length / cols);
+  // Guarded here too, not just at the caller: a 0 or negative `cols` divides into Infinity rows.
+  const safeCols = Math.max(1, cols);
+  const rows = Math.ceil(tier.items.length / safeCols);
   const rowH = Math.round(size * LINE);
   // Same border-box budget as the walls at the foot of the sheet: each row's 1px padding is
   // inside rowH, while the block's own padding-bottom and rule sit outside its auto height.
-  return { size, cols, rows, rowH, height: HDR_H + 8 + rows * rowH + 10 };
+  return { size, cols: safeCols, rows, rowH, height: HDR_H + 8 + rows * rowH + 10 };
 }
 
 /**
@@ -381,9 +383,14 @@ function derive(p, bandH) {
     bandH,
     featRowH,
     unit,
+    // A flexible row is its ranked cell's own fixed-plus-growth, or its wall cell's fixed need,
+    // whichever is taller — the same `Math.max` shape() judged the floor by, now applied to the
+    // height the solved `unit` actually produces.
     bandRowHeights: plan.map(
       (r, i) =>
-        (r.rigid ? r.need : r.fixed + Math.round(r.demand * r.weight * unit)) +
+        (r.rigid
+          ? r.need
+          : Math.max(r.wallFloor, r.fixed + Math.round(r.demand * r.weight * unit))) +
         (i < plan.length - 1 ? DIV : 0),
     ),
   };
@@ -396,7 +403,9 @@ function derive(p, bandH) {
  * from this floor, and a fractional canvas height cannot be filled exactly.
  */
 function shape(p, cols) {
-  const colsOf = (t) => Math.min(t.cols ?? cols, Math.max(1, t.items.length));
+  // `t.cols` comes straight from data.mjs — floor it at 1 so a stray `0` or negative doesn't turn
+  // this into a division by zero a few lines down (`Infinity` rows, and everything built on it).
+  const colsOf = (t) => Math.min(Math.max(1, t.cols ?? cols), Math.max(1, t.items.length));
 
   // A cell is one stack of tiers. Ranked stacks share whatever height the row gets; a wall stack
   // is worth exactly what its lines add up to, so it asks for that and no more.
@@ -423,6 +432,7 @@ function shape(p, cols) {
     const cells = [...byCol.values()].map(cellOf);
     const rigid = cells.every((c) => c.walls);
     const ranked = cells.filter((c) => !c.walls);
+    const walls = cells.filter((c) => c.walls);
     return {
       tiers,
       cells,
@@ -430,11 +440,15 @@ function shape(p, cols) {
       rigid,
       need: Math.max(...cells.map((c) => c.need)),
       // What a flexible row draws from the shared unit: its hungriest ranked cell's weighted row
-      // count, and that cell's own header/rule overhead. A wall cell beside a ranked one in the
-      // same row never grows, so it takes no part in either — `need` above already keeps the row
-      // tall enough to hold it regardless.
+      // count, and that cell's own header/rule overhead.
       demand: rigid ? 0 : Math.max(...ranked.map((c) => c.weighted)),
       fixed: rigid ? 0 : Math.max(...ranked.map((c) => c.fixed)),
+      // A wall cell beside a ranked one in the same row never grows, so its height has to be
+      // *reserved*, not shared — but the two sit at the *same* row height rather than stacking, so
+      // the row only has to clear whichever one needs more, not both added together. Kept apart
+      // from `fixed` (which only the ranked side feeds) so this stays a `Math.max` at the row
+      // level, not a second addend the ranked cell's own growth would pile on top of.
+      wallFloor: rigid ? 0 : walls.reduce((m, c) => Math.max(m, c.need), 0),
     };
   });
 
@@ -455,14 +469,21 @@ function shape(p, cols) {
   const rigidH = rows.reduce((s, r) => s + (r.rigid ? r.need : 0), 0);
   const fixedH = rows.reduce((s, r) => s + (r.rigid ? 0 : r.fixed), 0);
   const weightedDemand = rows.reduce((s, r) => s + (r.rigid ? 0 : r.demand * r.weight), 0);
+  // A flexible row's floor at the shared unit's own minimum (MIN_RANK_UNIT) — or its wall cell's
+  // fixed need, whichever is taller. Summed per row rather than folded into fixedH/weightedDemand
+  // above: a `Math.max` doesn't distribute over that sum, and a wall-heavy row's floor must only
+  // ever raise its own row, never eat into another row's share of the slack.
+  const rowFloors = rows.reduce(
+    (s, r) =>
+      s + (r.rigid ? 0 : Math.max(r.wallFloor, r.fixed + r.demand * r.weight * MIN_RANK_UNIT)),
+    0,
+  );
   const bandFloor =
     p.bandRule +
     Math.ceil(
       Math.max(
         p.featured ? HDR_H + p.featRows * FEAT_ROW_MIN : 0,
-        rows.length > 0
-          ? fixedH + rigidH + weightedDemand * MIN_RANK_UNIT + Math.max(0, rows.length - 1) * DIV
-          : 0,
+        rows.length > 0 ? rigidH + rowFloors + Math.max(0, rows.length - 1) * DIV : 0,
       ),
     );
   return { rankCols: cols, bandRowPlan: rows, rigidH, fixedH, weightedDemand, bandFloor };
