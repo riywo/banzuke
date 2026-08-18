@@ -25,7 +25,18 @@ Swap the data and it ranks anything (CRT terminal / departure board / periodic t
   <a href="samples/tiles.png"><img src="samples/tiles.png" width="32%" alt="Language banzuke, periodic table theme" /></a>
 </p>
 
-Every sample is a plain script under [samples/build/](samples/build) — `npm run samples` rebuilds them.
+Hundreds of items still fit, because the top band is a grid you arrange from the data — two
+tiers stacked in one cell, the long tail riding beside them as a wall — and the sheet is solved
+onto a 16:9 canvas so social previews stop cropping the top ranks away:
+
+<p>
+  <a href="samples/grid.png"><img src="samples/grid.png" width="100%" alt="Unix command banzuke, 293 commands on a solved 16:9 canvas" /></a>
+</p>
+
+Every sample is a plain script under [samples/build/](samples/build) — `npm run samples` rebuilds
+them. The six themed sheets share one square canvas so they line up above;
+[grid.mjs](samples/build/grid.mjs) instead runs the shipped template and keeps whatever canvas the
+solver picks.
 
 ## Install
 
