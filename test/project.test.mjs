@@ -18,10 +18,11 @@ const sizeOf = (file) => pngSize(readFileSync(file));
 test("an untouched scaffold produces a PNG and HTML (with the dated edition label)", () => {
   const dir = scaffold("proj-default");
   const out = runScript(path.join(dir, "banzuke.mjs"));
-  assert.match(out, /2144×\d+ px/);
+  assert.match(out, /2048×1152 px \(1\.78:1\)/); // the solved canvas, reported by the script
   const { width, height } = sizeOf(path.join(dir, "banzuke.png"));
-  assert.equal(width, 2144); // SHEET_W 1072 CSS px × dpr 2
-  assert.ok(height > 500, `height ${height}`);
+  assert.equal(width, 2048); // MIN_W 1024 CSS px × dpr 2 — sparse data needs no more
+  // Pinned to 16:9 so social previews stop cropping the top ranks off the sheet
+  assert.equal(height, 1152);
   const html = readFileSync(path.join(dir, "banzuke.html"), "utf8");
   assert.match(html, /Anime Banzuke/);
   assert.match(html, /scaleX|<span/);
@@ -32,8 +33,12 @@ test("renders at real-world scale with the 75-title fixture", () => {
   const dir = scaffold("proj-75", sampleData);
   runScript(path.join(dir, "banzuke.mjs"));
   const { width, height } = sizeOf(path.join(dir, "banzuke.png"));
-  assert.equal(width, 2144);
-  assert.ok(height > 1900 && height < 2400, `height ${height}`);
+  assert.ok(width > 2048, `expected the fixture to need a wider canvas, got ${width}`);
+  assert.ok(width <= 4096, `past X's ceiling: ${width}`); // MAX_W 2048 CSS × dpr 2
+  assert.ok(
+    Math.abs(height - (width * 9) / 16) <= 4,
+    `expected a 16:9 canvas, got ${width}×${height}`,
+  );
 });
 
 test("variants: a copy with different colors stays independent of the original", () => {

@@ -56,8 +56,9 @@ re-tier the data, or move one constant in the tuning-knob block at the top of `b
 re-run. Both files are meant to be edited — rebuilding the layout from scratch is a supported
 outcome, not a hack.
 
-Three tier layouts compose one sheet: `featured` (the big left column), `ranked` (numbered
-two-column blocks on the right) and `wall` (a dense unnumbered block at the bottom).
+Three tier layouts compose one sheet: `featured` (the big left column), `ranked` (numbered blocks
+on the right, split into one to four columns as the canvas widens) and `wall` (a dense unnumbered
+block at the bottom).
 
 ## The render pipeline
 
@@ -89,6 +90,43 @@ text gets its weight lightened to compensate, so a widened title does not turn i
 The subtle part, and the source of most layout bugs: `scaleX` changes what is *drawn*, not what
 is *laid out*. A squashed span still occupies its natural width, so any box holding one needs a
 fixed height or it can silently take a second line.
+
+### Solving the canvas before the markup
+
+The template solves its canvas before building markup. `geometry()` is pure arithmetic — wall
+column counts, row counts, tier heights, no text measurement and no rendering — so stepping
+`MIN_W` to `MAX_W` by `STEP` (~65 candidate widths at the shipped values) costs nothing, and the
+sheet can be pinned to a target aspect ratio instead of growing downward with the data. Everything
+the boxes need (the canvas, the band height, the derived featured row height, per-tier ranked
+heights, the wall plan) comes out of one call, which also makes the layout assertable in tests
+without a render.
+
+The height budget it computes only balances because takumi sizes boxes **border-box**: a declared
+`height` already contains that box's border and padding, so the rules between the sheet's
+fixed-height sections cost nothing extra, and only the auto-height wall tiers add theirs on top.
+Reserve height for the same rule twice and the sheet renders short of the canvas it is pinned to.
+
+### The band is rows of cells of stacks
+
+The top band — everything beside the featured column — is three levels deep, all driven by
+`row:`/`column:` in data.mjs. A **row** is one or more tiers that share a `row:` value (a tier
+with none is its own row, the original one-tier-per-row shape). Within a row, tiers that also
+share a `column:` **stack** on top of each other into one **cell**; different columns become
+cells standing side by side. A row is as tall as its hungriest cell — pairing a short tier with a
+tall one in the same row costs the short one nothing.
+
+A cell built entirely from wall tiers is **rigid**: its height is exactly the sum of its lines,
+computed once from its own `size:` and item count, and it never draws from the row's shared
+height. A ranked cell is the opposite — it always stretches to fill whatever the row gives it, so
+it can never be short (that is why `--report`'s `slack` only ever finds it on a wall cell). What a
+ranked cell *can* be is starved: capped by `TYPE.ranked.cap` or by the featured tier's last row,
+it can fill a tall box with small type and leave most of it as air, which reads full by height and
+bare by ink — `--report`'s `fill` is what catches that, not `slack`.
+
+`--report` does not re-derive any of this independently. `bandCells()` walks `geometry()`'s
+already-solved plan the same way `sheet()`'s `groupColumns` draws it — same row heights, same
+per-cell unit, same `tierSizes()` call — so the numbers it prints describe the markup that would
+actually render, not a parallel model of it that could drift out of sync.
 
 ### lib/ at a glance
 

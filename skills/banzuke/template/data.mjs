@@ -6,6 +6,26 @@
 //   - items are in rank order, top first. featured / ranked tiers get running numbers
 //   - An item is either a string or { title, year }. year is not displayed by default
 //     (edit banzuke.mjs if you want it)
+//   - row: tiers sharing a row stand side by side in the band; tiers with no row are each
+//          their own row, stacked top to bottom (the default). A "wall" tier can carry a
+//          row too — that moves it into the band with the wall's own packing instead of the
+//          foot, which is what makes a long tail tier cheap. Ignored on the featured tier,
+//          which always takes the left-hand column
+//   - column: within a shared row, tiers sharing a column stack on top of each other in one cell.
+//          A stack has to be all "wall" or all ranked — mixing them throws, because a wall packs
+//          one line per item off its own size: and a ranked tier divides the row into numbered
+//          rows, and one cell cannot do both
+//   - row: / column: numbers are *labels*, not an order. Tiers are grouped by the value and the
+//          groups come out in the order they are declared here, so `column: 2` written first
+//          renders on the left. Reorder the tiers to reorder the sheet
+//   - cols: how many columns a tier deals its own items into, overriding the count the sheet
+//          picked. Works on ranked tiers and on walls, in the band and at the foot; clamped to
+//          the tier's item count and to what the width can hold at MIN_COL_W a column
+//   - numbers: false (a ranked tier laid out by rank but shown with no numbers, and left out
+//              of the running count)
+//   - size: font size for a "wall" tier. A band wall (one with a row:) takes it directly; a foot
+//           wall is sized by WALL.sizes in banzuke.mjs instead. Ignored on a ranked tier, whose
+//           type comes from its row height and TYPE.ranked
 
 export default {
   /** Title across the top of the sheet */

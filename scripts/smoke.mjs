@@ -51,6 +51,6 @@ const version = execFileSync(...runtime.version, { encoding: "utf8" })
   .split("\n")[0]
   .replace(new RegExp(`^${name}\\s+`), "");
 const { width, height } = pngSize(readFileSync(path.join(dir, "banzuke.png")));
-assert.equal(width, 2144); // SHEET_W 1072 CSS px × dpr 2
-assert.ok(height > 500, `height ${height}`);
+assert.equal(width, 2048); // MIN_W 1024 CSS px × dpr 2 — the shipped scaffold needs no more
+assert.equal(height, 1152); // pinned to 16:9
 console.log(`smoke ok on ${name} ${version}: ${width}×${height} px in ${dir}`);
