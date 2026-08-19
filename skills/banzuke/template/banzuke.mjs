@@ -158,11 +158,17 @@ async function row({ item, rank, size, colW, color, stretch, last }) {
   // 8px gap that otherwise separates it from the number.
   const gap = numbered ? 8 : PAD;
   const avail = colW - SPINE - rankW - gap - PAD;
+  // The title box needs its height pinned. fitSpan squashes with scaleX, which shrinks what is
+  // *drawn* and not what is *laid out*, so a squashed span still occupies its natural width and
+  // its box can take a second line box. In a row centred with align-items:center that overflows
+  // both ways and the row clips the glyphs top and bottom — and it strikes exactly the longest
+  // titles, the ones already scaled below 1. A face with tall metrics (LINE ~1.45 for CJK) hits
+  // it first, since the line box is a larger share of the row.
   const span = await fitT(titleOf(item), { size, avail, stretch });
   const bb = last ? "" : `border-bottom:${SEP}px solid ${T.ink};`;
   return `<div style="flex:1;display:flex;align-items:center;min-height:0;overflow:hidden;border-left:${SPINE}px solid ${color};background:${T.bg};${bb}">
     ${numbered ? `<div style="width:${rankW}px;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${rank}</div>` : ""}
-    <div style="flex:1;min-width:0;overflow:hidden;padding:0 ${PAD}px 0 ${gap}px;line-height:${LINE}">${span}</div>
+    <div style="flex:1;min-width:0;height:${Math.round(size * LINE)}px;overflow:hidden;padding:0 ${PAD}px 0 ${gap}px;line-height:${LINE}">${span}</div>
   </div>`;
 }
 

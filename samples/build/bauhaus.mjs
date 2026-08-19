@@ -47,6 +47,9 @@ const header = (name, count) =>
 async function row({ item, size, colW, color, last }) {
   const rankSize = Math.max(10, size * 0.5);
   const rankW = Math.round(6 + 1.4 * rankSize);
+  // The title box needs its height pinned, for the reason the wall rows below spell out: a
+  // scaleX-squashed span still lays out at its natural width, so its box can take a second line
+  // box, and a row centred with align-items:center then clips the glyphs top and bottom.
   const span = await fitT(item.title, {
     size,
     avail: colW - SPINE - rankW - 8 - PAD,
@@ -55,7 +58,7 @@ async function row({ item, size, colW, color, last }) {
   const bb = last ? "" : `border-bottom:${SEP}px solid ${T.ink};`;
   return `<div style="flex:1;display:flex;align-items:center;min-height:0;overflow:hidden;border-left:${SPINE}px solid ${color};background:${T.bg};${bb}">
     <div style="width:${rankW}px;padding-left:6px;text-align:right;color:${T.muted};font-weight:${T.weight};font-size:${rankSize}px;line-height:1">${item.rank}</div>
-    <div style="flex:1;min-width:0;overflow:hidden;padding:0 ${PAD}px 0 8px;line-height:${LINE}">${span}</div>
+    <div style="flex:1;min-width:0;height:${Math.round(size * LINE)}px;overflow:hidden;padding:0 ${PAD}px 0 8px;line-height:${LINE}">${span}</div>
   </div>`;
 }
 
