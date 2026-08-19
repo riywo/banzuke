@@ -27,16 +27,17 @@ Swap the data and it ranks anything (CRT terminal / departure board / periodic t
 
 Hundreds of items still fit, because the top band is a grid you arrange from the data — two
 tiers stacked in one cell, the long tail riding beside them as a wall — and the sheet is solved
-onto a 16:9 canvas so social previews stop cropping the top ranks away:
+onto a 16:9 canvas so social previews stop cropping the top ranks away. Those six above are
+demos; this one is not. It is the sheet the skill was written for: every anime I have watched,
+six tiers deep from 殿堂入り down to 見た, kept in
+[its own repo](https://github.com/riywo/anime-banzuke) and rebuilt whenever the list changes.
 
 <p>
-  <a href="samples/grid.png"><img src="samples/grid.png" width="100%" alt="Unix command banzuke, 293 commands on a solved 16:9 canvas" /></a>
+  <a href="https://github.com/riywo/anime-banzuke"><img src="https://raw.githubusercontent.com/riywo/anime-banzuke/main/banzuke.png" width="100%" alt="riywo のアニメ番付 — hundreds of anime across six tiers, from 殿堂入り down to 見た" /></a>
 </p>
 
-Every sample is a plain script under [samples/build/](samples/build) — `npm run samples` rebuilds
-them. The six themed sheets share one square canvas so they line up above;
-[grid.mjs](samples/build/grid.mjs) instead runs the shipped template and keeps whatever canvas the
-solver picks.
+The six themed sheets are plain scripts under [samples/build/](samples/build) — `npm run samples`
+rebuilds them, all onto the same square canvas so they line up above.
 
 ## Install
 

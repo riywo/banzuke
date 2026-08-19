@@ -1,7 +1,5 @@
 // Rebuild every README sample: `npm run samples`.
 // The six themed sheets render onto the same canvas, so the images line up in the README grid.
-// grid.mjs is deliberately not one of them — it runs the shipped template at whatever canvas the
-// solver picks, which is the whole thing it is there to show.
 import { emit, summarize } from "./kit.mjs";
 
 const SAMPLES = [
@@ -22,7 +20,3 @@ const lines = await Promise.all(
   }),
 );
 console.log(lines.join("\n"));
-
-// Last, and on its own: scaffolding the template costs a second and it writes its own canvas.
-const { default: buildGrid } = await import("./grid.mjs");
-console.log(buildGrid().log.replace(/ →.*/, "  → samples/grid.png"));
