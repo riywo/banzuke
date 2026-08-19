@@ -210,10 +210,22 @@ rows at once), and a row's cells each need real width, so a row of many cells ma
 widen and eventually runs out of canvas. The `row:` and `column:` numbers group tiers; they do not
 order them — the order is the order the tiers appear in `data.mjs`.
 
-So when a sheet is dense enough to be interesting, **do not polish the first arrangement**.
-Produce three to five that differ *structurally* — which tiers share a row, which layout a long
-tier uses, how many columns it deals into — score each with `node banzuke.mjs --report`, then
-open the winner as an image and walk the checklist above. `--report` prints, in order:
+So when a sheet is dense enough to be interesting, **do not polish the first arrangement, and do
+not pick the winner on your own.** Fan out speculatively: build **8–12** candidates that differ
+*structurally*, score them all with `node banzuke.mjs --report`, render the survivors to PNG,
+**look at every one**, then put the best 3–5 in front of the user as images and let them choose.
+A sheet renders in ~300ms, so the batch is nearly free; what is expensive is converging on one
+skeleton early and finding out four rounds later that another one was better all along.
+
+Vary the *skeleton*, not the dial settings: which tiers share a `row:`, which stack in one cell
+with `column:`, whether a long tail tier moves into the band as a wall or stays at the foot, how
+many columns each deals into, which tier is allowed to be the big one. Two candidates that differ
+only in a font size are one candidate.
+
+**`--report`'s ranking is not the answer.** Coverage rewards precisely what the eye rejects — the
+densest candidate is routinely the one whose longest titles are crushed to 56% width. Use the
+numbers to *cut* (anything with `!>` or `slack` is out) and your eyes to *choose*. `--report`
+prints, in order:
 
 - **canvas / ratio / clamped / cropRisk** — the solved size, and whether the data missed the
   target ratio (`clamped`) or came out genuinely croppable (`cropRisk`)
@@ -263,6 +275,33 @@ Levers worth knowing before you start guessing:
   measurement went from 14.4% to 28.8% fill at the same 1728×972 canvas
 - Coverage compares candidates *on the same data*. It is not a score to chase in the abstract — a
   sheet of long titles will always read denser than one of short ones
+
+### Traps that cost a round each — all measured, none of them obvious
+
+- **A tier can be starved by its *ceiling*, not by its height.** A ranked tier may never type
+  larger than the featured tier's last row, so a steep `TYPE.featured.taper` pins every ranked
+  tier low and their rows fill with air that no `cols:` change can touch — `--report` will not
+  call it starved, because the type is capped rather than small. Raising `taper` (46→31 becomes
+  46→35) lifts the ceiling and the rows fill themselves, at the cost of contrast *inside* the
+  featured column. That is a straight trade: offer both ends to the user rather than picking
+- **Two ranked tiers side by side share a row height but not a row count.** A 10-item tier beside
+  a 20-item one gets rows twice as tall for the same type, and squeezing the row to close that gap
+  starves the neighbour instead. Stacking the two in one cell with `column:` gives each its own
+  height and removes the waste outright — usually better than any amount of `cols:` tuning
+- **A band wall does not stretch.** Its cell is sized by whatever ranked tier shares the row, and
+  the remainder shows up as `slack`: blank paper nobody claims. Raise that wall's `size:` until
+  the slack is gone — it is free density, and it pushes the neighbouring band rows tighter too
+- **`rowFill` cannot exceed `1 / LINE`.** Above that the line box is taller than the row by
+  construction. With a CJK face at `LINE: 1.45` the ceiling is ~0.69, not 1.0
+- **Only some column counts divide evenly.** 10 items over 4 columns deals 3/3/2/2 and the short
+  columns stretch into taller rows. When a tier's count has no even split at a comfortable width,
+  "ragged rows" versus "crushed titles" is a real choice to hand to the user, not one to guess
+- **`--report`'s `squeeze` is sheet-wide.** To learn whether *one* tier is crushed, read the
+  `scaleX(...)` values back out of `banzuke.html` for that tier's titles. A tier whose worst
+  title sits at 0.56 and one whose worst sits at 0.86 are very different sheets, and a single
+  count across the whole sheet cannot tell them apart
+- **Freeing height shrinks the sheet rather than feeding the band**, unless `MIN_W` is pinned to
+  `MAX_W`. Every "I made something smaller and it got worse" goes through this
 
 ## Tips for fixing things
 
@@ -362,19 +401,23 @@ by trying all of them. Two consequences worth knowing:
 - Check the weight actually exists in the file. A static font ignores `T.weight: 800` and renders
   at whatever it has
 
-## When you want to show several design options (optional)
+## Showing the user options — the default, not a special case
 
-Usually polishing one template is enough. Only when the user is torn on the design is it worth
-mass-producing candidates for them to pick from:
+The user picks the design; your job is to narrow the field and to make the trade-offs legible.
+Copy `banzuke.mjs` (`banzuke-dark.mjs`, …) and change the output filenames in the entry point, or
+drive one script over a table of candidate configs — either way render them all, eyeball them all,
+cut the weak ones, and present **3–5** with their images and one line each on what they give up.
 
-- Copy `banzuke.mjs` (`banzuke-dark.mjs`, …), change the output filenames in the entry point,
-  run them in turn and compare. At 300ms a sheet, make as many as you like
-- Options land best when **the whole visual language and composition** differ (a sumo-banzuke
-  style with a vertical title and east/west spread, a terminal look, a tile grid, a departure
-  board — rewriting the layout wholesale is fine). Save color/weight micro-variants for the
-  final polish once a direction is picked
-- Eyeball them all yourself, cut the weak ones, and show the user **3–6 options** with a
-  one-line note each. Delete the rejects and their output once a choice is made
+- **Be inventive.** The band keys arrange the default skeleton, but the layout is yours to rewrite:
+  a sumo banzuke with a vertical title and an east/west spread, a terminal readout, a tile grid, a
+  departure board, a newspaper front page. A batch of five that are all the stock skeleton with
+  different numbers is a wasted batch
+- **Ask with pictures.** Describing a layout tells nobody whether they will like it. Render first,
+  then ask
+- **Name the trade, not just the winner.** "denser but four titles are crushed" is a choice the
+  user can make; "coverage 30.2%" is not
+- Save color/weight micro-variants for the final polish once a direction is picked, and delete the
+  rejects and their output once a choice is made
 - When a copy transforms the data, do it non-destructively (`data.tiers.map((t) => ({ ...t, … }))`)
 
 ## The canvas — why sheets are 16:9
